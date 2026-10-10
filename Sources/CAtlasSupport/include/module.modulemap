@@ -1,0 +1,4 @@
+module CAtlasSupport {
+    header "CAtlasSupport.h"
+    export *
+}

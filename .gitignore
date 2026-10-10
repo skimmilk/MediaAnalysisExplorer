@@ -1,0 +1,23 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+
+test-media/*.jpg
+test-media/*.mp4
+test-media/.*.mov
+test-media/import-receipt.json
+test-media/coverage.json
+test-media/validation*.json
+
+research-captures/
+
+scripts/__pycache__/
+
+# Local, read-only copies of Apple's compiled models for BNNS format research.
+research-notes/bnns/native-cache/*.bnnsir
+research-notes/bnns/__pycache__/
+
+# Local E5 manifest copies exported through native read authorization.
+research-notes/e5/native-cache/*.e5
+research-notes/e5/__pycache__/
