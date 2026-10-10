@@ -6,7 +6,7 @@ A native macOS app for seeing what Apple's `mediaanalysisd` knows about your pho
 
 ## What you can explore
 
-- **Media:** Browse your Photos library's analysis records alongside the original image or video. See captions, recognized text, scene scores, faces, poses, pets, and image characteristics. Detection boxes appear over the image; timed video and audio results follow playback.
+- **Media:** Browse your Photos library's analysis records alongside the original image or video. See captions, recognized text, scene and sensitivity scores, faces, poses, pets, and image characteristics. Detection boxes appear over the image; timed video and audio results follow playback.
 - **Processing:** See recent analysis activity, background sessions, result changes, and the daemon's current CPU and memory use. Change the date range or open a recently analyzed item.
 - **Models & Caches:** Browse model bundles and their files, see their purpose and compute stages, and inspect tensor inputs, outputs, and compiled operations. Explore the scene taxonomy and geographic scene atlas in dedicated browsers.
 

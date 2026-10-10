@@ -87,7 +87,7 @@ public enum AnalysisPayload {
         case "ZACTIONSCONFIDENCE", "ZSENSITIVITYSCENERESULTS":
             guard let scores = value as? [String: Any] else { return nil }
             for (id, score) in scores where !id.hasPrefix("$") {
-                let name = column == "ZACTIONSCONFIDENCE" ? Int(id).flatMap { taxonomy.actions[$0] } : nil
+                let name = Int(id).flatMap { column == "ZACTIONSCONFIDENCE" ? taxonomy.actions[$0] : SensitivityLabels.name(for: $0) }
                 fields[name.map { "\($0.replacingOccurrences(of: "_", with: " ")) · ID \(id)" } ?? "ID \(id) (unresolved)"] = text(score)
                 if column == "ZACTIONSCONFIDENCE", let number = score as? NSNumber,
                    number.doubleValue.isFinite, (0...1).contains(number.doubleValue) {
@@ -99,7 +99,8 @@ public enum AnalysisPayload {
                 if let a = Int($0.id), let b = Int($1.id), a != b { return a < b }
                 return $0.id < $1.id
             }
-            fields["Label evidence"] = column == "ZACTIONSCONFIDENCE" ? "Installed action_taxonomy.plist array index; database/model revision compatibility unverified." : "Archived score dictionary; these private scene identifiers are unresolved."
+            fields["Label evidence"] = column == "ZACTIONSCONFIDENCE" ? "Installed action_taxonomy.plist array index; database/model revision compatibility unverified." : SensitivityLabels.evidence
+            if column == "ZSENSITIVITYSCENERESULTS" { fields["Score interpretation"] = SensitivityLabels.scoreInterpretation }
             summary = column == "ZACTIONSCONFIDENCE" ? "Action scores · \(scores.count) archived entries" : "Sensitivity scores · \(scores.count) archived entries"
         case "ZOBJECTBOUNDS":
             guard let bounds = value as? [String] else { return nil }

@@ -209,7 +209,7 @@ public enum VisualMetadata {
         "elementCount": "Declared components",
         "elementsType": "Declared element type",
         "ZSENSITIVITYSCENERESULTS": "Archived sensitivity scores",
-        "ZSENSITIVITY": "Sensitivity ID (unresolved)",
+        "ZSENSITIVITY": "Sensitivity decision mask (raw)",
         "ZSTARTTIMEVALUE": "Start time ticks",
         "ZSTARTTIMESCALE": "Start ticks/second",
         "ZDURATIONTIMEVALUE": "Duration ticks",

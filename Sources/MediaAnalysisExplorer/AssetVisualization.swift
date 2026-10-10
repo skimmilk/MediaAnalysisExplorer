@@ -250,6 +250,7 @@ private struct CompactResultFamily: View {
                     ForEach(Array(family.rows.prefix(visibleCount))) { row in
                         let matching = regions.filter { $0.record == (row.fields["Z_PK"] ?? String(row.id)) }
                         VStack(alignment: .leading, spacing: 5) {
+                            if family.id == "ZSAFETYRESULT" { SensitivityPercentages(row: row) }
                             if family.count > 1 { Text("Record \(row.fields["Z_PK"] ?? String(row.id))").font(.caption.weight(.medium)) }
                             if let text = row.fields["ZTEXT"], text != "NULL" { Text(text).font(.callout).textSelection(.enabled) }
                             if let start = VisualMetadata.eventTime(row) {
@@ -308,7 +309,9 @@ struct DecodedPayloadFields: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Text(column == "ZACTIONSCONFIDENCE" ? "Action probabilities" : VisualMetadata.label(column)).font(.caption.weight(.semibold)).help(column)
-                        InfoButton(title: "Decoded payload", text: decoded.summary)
+                        InfoButton(title: "Decoded payload", text: column == "ZSENSITIVITYSCENERESULTS"
+                            ? [decoded.summary, decoded.fields["Label evidence"], decoded.fields["Score interpretation"]].compactMap { $0 }.joined(separator: "\n\n")
+                            : decoded.summary)
                     }
                     if column == "ZACTIONSCONFIDENCE", !decoded.actionProbabilities.isEmpty {
                         ForEach(decoded.actionProbabilities) { action in
@@ -317,12 +320,55 @@ struct DecodedPayloadFields: View {
                                 Text(action.percentage).monospacedDigit()
                             }.font(.caption)
                         }
+                    } else if column == "ZSENSITIVITYSCENERESULTS" {
+                        SensitivityScoreFields(fields: decoded.fields)
                     } else { MetadataFields(fields: decoded.fields) }
                     if !decoded.vector.isEmpty { DescriptorVectorView(payload: decoded, column: column, peers: peers) }
                 }.padding(7).frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary.opacity(0.3)).clipShape(RoundedRectangle(cornerRadius: 4))
             }
         }
+    }
+}
+
+struct SensitivityPercentages: View {
+    let row: DBRow
+    var body: some View {
+        if let payload = row.decoded["ZSENSITIVITYSCENERESULTS"] {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Sensitivity scores").font(.caption.weight(.semibold))
+                    InfoButton(title: "Sensitivity scores", text: SensitivityLabels.scoreInterpretation)
+                }
+                SensitivityScoreFields(fields: payload.fields, percentages: true)
+            }
+        }
+    }
+}
+
+private struct SensitivityScoreFields: View {
+    let fields: [String: String]
+    var percentages = false
+    private var scoreKeys: [String] {
+        fields.keys.filter { $0.contains(" · ID ") || ($0.hasPrefix("ID ") && $0.hasSuffix("(unresolved)")) }.sorted()
+    }
+    var body: some View {
+        ForEach(scoreKeys, id: \.self) { key in
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(label(for: key))
+                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                Text(value(for: key)).monospacedDigit().textSelection(.enabled)
+            }.font(.caption)
+        }
+    }
+    private func label(for key: String) -> String {
+        guard percentages else { return key }
+        return key.hasPrefix("ID ") ? "Unknown sensitivity label" : key.components(separatedBy: " · ID ")[0]
+    }
+    private func value(for key: String) -> String {
+        guard percentages else { return fields[key] ?? "" }
+        guard let raw = fields[key], let score = Double(raw), score.isFinite, (score * 100).isFinite else { return "Unavailable" }
+        return String(format: "%.2f%%", score * 100)
     }
 }
 

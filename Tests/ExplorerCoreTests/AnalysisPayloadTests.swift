@@ -29,6 +29,22 @@ final class AnalysisPayloadTests: XCTestCase {
         XCTAssertEqual(region.overlayLabel(focused: false), "Action classification #1")
         XCTAssertEqual(VisualMetadata.explainedFields(row, table: region.table)["Top stored action scores"], "clapping 44.9%; walking 25.9%; none 17.2%")
     }
+    func testSensitivityScoreArchiveUsesItsOwnLabelsAndPreservesUnknownIDs() throws {
+        let decoded = try XCTUnwrap(AnalysisPayload.decode(try archive(["2147481853": 0.004638671875, "2147481854": 0.0009765625,
+            "2147481342": 1.25, "2147481343": -0.25, "881": 0.5]), column: "ZSENSITIVITYSCENERESULTS", table: "ZSAFETYRESULT", taxonomy: taxonomy))
+        XCTAssertEqual(decoded.fields["NSFW any · ID 2147481853"], "0.004638671875")
+        XCTAssertEqual(decoded.fields["NSFW explicit · ID 2147481854"], "0.0009765625")
+        XCTAssertEqual(decoded.fields["SafetyNet Lite gore · ID 2147481342"], "1.25")
+        XCTAssertEqual(decoded.fields["SafetyNet Lite violence · ID 2147481343"], "-0.25")
+        XCTAssertEqual(decoded.fields["ID 881 (unresolved)"], "0.5")
+        XCTAssertTrue(decoded.actionProbabilities.isEmpty)
+        XCTAssertTrue(decoded.fields["Label evidence"]!.contains("26A434"))
+        XCTAssertTrue(decoded.fields["Score interpretation"]!.contains("probability calibration unverified"))
+        let fields = VisualMetadata.explainedFields(DBRow(id: 0, fields: ["ZSENSITIVITY": "0"]), table: "ZSAFETYRESULT")
+        XCTAssertEqual(fields["ZSENSITIVITY"], "0")
+        XCTAssertEqual(fields["Sensitivity label evidence"], decoded.fields["Label evidence"])
+        XCTAssertNil(fields["Safety category limitation"])
+    }
     func testActionProbabilitiesHandleTiesAndUnknownIDsWithoutDisplayingInvalidValues() throws {
         let decoded = try XCTUnwrap(AnalysisPayload.decode(try archive(["99": 0.2, "3": 0.2, "0": 0.3, "10": -0.1, "11": 1.1]),
             column: "ZACTIONSCONFIDENCE", table: "ZHUMANACTIONCLASSIFICATIONRESULT", taxonomy: taxonomy))
@@ -107,6 +123,9 @@ final class AnalysisPayloadTests: XCTestCase {
         XCTAssertEqual(detail.families.reduce(0) { $0 + $1.count }, 761)
         let action = try XCTUnwrap(detail.families.first { $0.id == "ZHUMANACTIONCLASSIFICATIONRESULT" }?.rows.first?.decoded["ZACTIONSCONFIDENCE"])
         XCTAssertNotNil(action.fields["clapping · ID 3"])
+        let sensitivity = try XCTUnwrap(detail.families.first { $0.id == "ZSAFETYRESULT" }?.rows.first?.decoded["ZSENSITIVITYSCENERESULTS"])
+        XCTAssertEqual(sensitivity.fields["NSFW any · ID 2147481853"], "0.004638671875")
+        XCTAssertEqual(sensitivity.fields["NSFW explicit · ID 2147481854"], "0.0009765625")
         let face = try XCTUnwrap(detail.families.first { $0.id == "ZFACEPRINTRESULT" }?.rows.first?.decoded["ZFACEPRINT"])
         XCTAssertEqual(face.fields["elementCount"], "128")
         XCTAssertEqual(face.fields["descriptorByteLength"], "512")

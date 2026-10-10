@@ -52,6 +52,7 @@ struct LinkedRecordInspector: View {
                 ForEach(records.rows) { row in
                     GroupBox("Record " + row["Z_PK"]) {
                         VStack(alignment: .leading, spacing: 9) {
+                            if records.reference.table == "ZSAFETYRESULT" { SensitivityPercentages(row: row) }
                             if records.reference.table != "ZFEATUREVECTORRESULT", let start = VisualMetadata.eventTime(row), let player { Button(String(format: "Jump to %.3f s", start)) { player.seek(to: CMTime(seconds: max(0, start), preferredTimescale: 600)) } }
                             let family = ResultFamily(table: TableSchema(name: records.reference.table, columns: [:]), count: 1, rows: [row])
                             ForEach(VisualMetadata.regions(family)) { region in Button("Pin " + region.title) { inspect(region) } }

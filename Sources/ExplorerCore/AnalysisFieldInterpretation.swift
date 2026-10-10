@@ -79,7 +79,10 @@ public enum AnalysisFieldInterpretation {
             }
         }
         if table == "ZLOUDNESSRESULT" { notes["Audio-level evidence"] = "Installed LkFsMeasure calls support LKFS-style loudness; peak path uses maximum magnitude. Persisted calibration/gating/window remain unverified. Values are plotted in stored units, not acoustic sound-pressure dB." }
-        if table == "ZSAFETYRESULT" { notes["Safety category limitation"] = "Installed SafetyNetLight has ten named output categories, but no verified mapping to the captured private sensitivity IDs. Raw score IDs remain unresolved." }
+        if table == "ZSAFETYRESULT" {
+            notes["Sensitivity label evidence"] = SensitivityLabels.evidence
+            notes["Sensitivity score interpretation"] = SensitivityLabels.scoreInterpretation
+        }
         if table == "ZORIENTATIONRESULT" { notes["Orientation limitation"] = "Captured videos all stored 3. Private enum compatibility is unverified; do not substitute EXIF orientation names." }
         if table == "ZSUMMARIZEDEMBEDDINGRESULT" { notes["Summary reference interpretation"] = "Embedding/thumbnail IDs resolve within their own asset. Representative arrays differ in length and can repeat; they are not a validated one-to-one zip or filesystem paths." }
         return notes

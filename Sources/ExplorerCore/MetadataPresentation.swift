@@ -10,7 +10,8 @@ public struct MetadataPresentation: Sendable {
         let documentation: Set<String> = [
             "Face flag evidence", "Position evidence", "Face reference scope", "Pose group evidence",
             "Motion flag interpretation", "Statistics flag evidence", "Version interpretation",
-            "Audio-level evidence", "Safety category limitation", "Orientation limitation",
+            "Audio-level evidence", "Safety category limitation", "Sensitivity label evidence",
+            "Sensitivity score interpretation", "Score interpretation", "Orientation limitation",
             "Summary reference interpretation", "Action label evidence", "Analysis type interpretation",
             "Interpretation", "Evidence", "Label evidence", "Schema interpretation", "Shot type evidence"
         ]

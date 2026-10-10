@@ -129,6 +129,7 @@ private struct PlaybackMomentContent: View, Equatable {
                             Text("Sample at " + ImageFeatureSamples.timeLabel(record.start)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         }
                     } else {
+                        if record.table == "ZSAFETYRESULT" { SensitivityPercentages(row: record.row) }
                         if let player { Button("Jump to start") { player.seek(to: CMTime(seconds: max(0, record.start), preferredTimescale: 600)) }.controlSize(.small) }
                         MetadataFields(fields: record.fields)
                         DecodedPayloadFields(row: record.row)
