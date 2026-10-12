@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import ExplorerCore
 
@@ -19,8 +20,13 @@ enum Section: String, CaseIterable, Identifiable {
     @Published var section: Section = .media
     let daemonDatabases = DaemonDatabase.known(home: FileManager.default.homeDirectoryForCurrentUser)
     @Published var dashboard: ProcessingDashboard?
-    @Published var processingHistory: ProcessingHistory?
+    @Published var processingHistory: ProcessingHistory? { didSet { trackRecentAnalysis() } }
+    @Published private(set) var recentAnalysisArrivals: [String: Date] = [:]
+    private var recentAnalysisDates: [String: Date] = [:]
+    private var recentHistoryWindow: DateInterval?
+    private var processingRefreshPending = false
     @Published var processingHistoryFailure: String?
+    let analysisLauncher: AnalysisLauncher
     @Published var processingRange: ProcessingRange = .week { didSet { if !settingHistoryWindow && oldValue != processingRange { refreshProcessingHistory() } } }
     @Published var processingStart = Calendar.current.date(byAdding: .day, value: -29, to: Date())! { didSet { if !settingHistoryWindow && processingRange == .custom { refreshProcessingHistory() } } }
     @Published var processingEnd = Date() { didSet { if !settingHistoryWindow && processingRange == .custom { refreshProcessingHistory() } } }
@@ -106,12 +112,28 @@ enum Section: String, CaseIterable, Identifiable {
     }
     private var loadedMediaKey: MediaKey?
     private var mediaCache: [CachedMedia] = []
+    private var mediaRefreshPending = false
+    private var mediaChangeMonitor: ProcessingChangeMonitor?
+    private var monitoredMediaSource: SourceConfiguration?
+    private var launchWasRunning = false
+    private var analysisLaunchObservation: AnyCancellable?
 
     init(automaticLoading: Bool = true, preferences: UserDefaults = .standard) {
         self.automaticLoading = automaticLoading
+        analysisLauncher = AnalysisLauncher(recoverSession: automaticLoading, preferences: preferences)
         geography = GeographyModel(preferences: preferences)
         playbackPreferences = preferences
         watchedPlaybackClasses = TimedResultGroup.orderedClasses(preferences.stringArray(forKey: Self.playbackWatchKey) ?? [])
+        analysisLaunchObservation = analysisLauncher.$status.sink { [weak self] status in
+            guard let self else { return }
+            let running = status.map { !$0.finished } ?? false
+            let ended = launchWasRunning && !running
+            launchWasRunning = running
+            if ended {
+                mediaAnalysisChanged()
+                refreshDashboard(); refreshProcessingHistory()
+            }
+        }
         guard let data = UserDefaults.standard.data(forKey: Self.cacheBookmarkKey) else { return }
         do {
             var stale = false
@@ -184,6 +206,7 @@ enum Section: String, CaseIterable, Identifiable {
     func connect(_ configuration: SourceConfiguration) {
         for lane in ["source", "media", "mediaSearch", "detail", "resultPage", "preview"] { cancel(lane) }
         mediaCache = []; loadedMediaKey = nil; mediaBrowserVisible = true
+        mediaRefreshPending = false; mediaChangeMonitor = nil; monitoredMediaSource = nil
         source = configuration; sourceReady = false; schema = []; assets = []; detail = nil; preview = nil; previewFailure = nil; selectedAsset = nil
         search = ""; pageCursors = [0]; photosWarning = nil; notice = nil; errorMessage = nil
         run("source", work: { try ReadDatabase(path: configuration.analysisPath, budget: $0).schema() }) { [self] schemas in
@@ -215,7 +238,9 @@ enum Section: String, CaseIterable, Identifiable {
     }
     func activateSection() {
         switch section {
-        case .media: if !sourceReady && !busy.contains("source") { showMedia() }
+        case .media:
+            if !sourceReady && !busy.contains("source") { showMedia() }
+            else { refreshMediaIfNeeded() }
         case .processing: if dashboard == nil { refreshDashboard() }; if processingHistory == nil && !busy.contains("processingHistory") { refreshProcessingHistory() }
         case .caches: ensureCacheLoaded(); if cacheView == .taxonomy { ensureTaxonomySources() }; if cacheView == .geography { ensureGeography() }
         }
@@ -234,11 +259,77 @@ enum Section: String, CaseIterable, Identifiable {
     }
     func refreshProcessingHistory() {
         guard automaticLoading else { return }
+        processingRefreshPending = false
         let databases = daemonDatabases, range = processingRange, start = processingStart, end = processingEnd
         processingHistoryFailure = nil
         run("processingHistory", seconds: 20, onFailure: { [self] error in processingHistoryFailure = error.localizedDescription }, work: {
             try ProcessingHistoryReader.read(databases: databases, range: range, customStart: start, customEnd: end, budget: $0)
         }) { [self] history in processingHistory = history }
+    }
+    func pollProcessingChanges(_ monitor: ProcessingChangeMonitor) async {
+        guard automaticLoading else { return }
+        let scope = selectedDatabaseAccessURL
+        let scoped = scope?.startAccessingSecurityScopedResource() == true
+        defer { if scoped { scope?.stopAccessingSecurityScopedResource() } }
+        let changed = await monitor.hasChanges()
+        guard !Task.isCancelled else { return }
+        if changed { mediaAnalysisChanged() }
+        processingRefreshPending = processingRefreshPending || changed
+        if processingRefreshPending && !busy.contains("processingHistory") { refreshProcessingHistory() }
+    }
+    func mediaAnalysisChanged() {
+        mediaRefreshPending = true
+        refreshMediaIfNeeded()
+    }
+    func refreshMediaIfNeeded() {
+        guard mediaRefreshPending, section == .media, sourceReady, hasMediaAssets,
+              busy.isDisjoint(with: ["source", "media", "detail", "preview", "resultPage"]) else { return }
+        mediaRefreshPending = false
+        mediaCache = []; loadedMediaKey = nil
+        // Reuse the current query/page. loadAssets retains the selected asset
+        // when it is still present and rereads its stored analysis results.
+        loadAssets(refreshDetail: true)
+    }
+    func pollMediaChanges() async {
+        guard automaticLoading, sourceReady, hasMediaAssets else { return }
+        let config = source
+        if monitoredMediaSource != config || mediaChangeMonitor == nil {
+            monitoredMediaSource = config
+            mediaChangeMonitor = ProcessingChangeMonitor(databases: [DaemonDatabase(name: "Media", purpose: "Selected analysis source", source: config)])
+        }
+        guard let monitor = mediaChangeMonitor else { return }
+        let scope = selectedDatabaseAccessURL
+        let scoped = scope?.startAccessingSecurityScopedResource() == true
+        defer { if scoped { scope?.stopAccessingSecurityScopedResource() } }
+        let changed = await monitor.hasChanges()
+        guard !Task.isCancelled, source == config else { return }
+        if changed { mediaAnalysisChanged() }
+        else { refreshMediaIfNeeded() }
+    }
+    func refreshProcessingProcesses() {
+        guard automaticLoading, !busy.contains("dashboard"), !busy.contains("dashboardSample"), let dashboard else { return }
+        run("dashboardSample", seconds: 3, work: { _ in ProcessingDashboardReader.resampleProcesses(dashboard) }) { [self] sample in
+            // A full dashboard read may have finished while the process sample ran.
+            if !busy.contains("dashboard"), self.dashboard?.updated == dashboard.updated { self.dashboard = sample }
+        }
+    }
+    private func trackRecentAnalysis() {
+        guard let history = processingHistory, history.total(\.assets) != nil else { return }
+        let now = Date(), window = DateInterval(start: history.start, end: history.end)
+        let dates = Dictionary(history.recentAssets.map { ($0.identifier, $0.date) }, uniquingKeysWith: { a, b in max(a, b) })
+        if recentHistoryWindow == window {
+            var arrivals = recentAnalysisArrivals.filter { dates[$0.key] != nil && now.timeIntervalSince($0.value) < 30 }
+            for (identifier, date) in dates where recentAnalysisDates[identifier].map({ date > $0 }) ?? true {
+                arrivals[identifier] = now
+            }
+            recentAnalysisArrivals = arrivals
+        } else {
+            // Opening the dashboard or expanding the date range is a baseline,
+            // rather than evidence of freshly completed analysis.
+            recentAnalysisArrivals = [:]
+        }
+        recentAnalysisDates = dates
+        recentHistoryWindow = window
     }
     func focusProcessingPeriod(start: Date, end: Date) {
         settingHistoryWindow = true

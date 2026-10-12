@@ -102,7 +102,14 @@ struct MediaView: View {
                 }
             }
         }
-        .onAppear { model.loadDetail() }
+        .onAppear { model.refreshMediaIfNeeded(); model.loadDetail() }
+        .task(id: model.source) {
+            while !Task.isCancelled {
+                await model.pollMediaChanges()
+                do { try await Task.sleep(for: .milliseconds(model.analysisLauncher.isRunning ? 250 : 1_000)) }
+                catch { break }
+            }
+        }
         .onChange(of: model.selectedAsset) { _, _ in
             model.loadDetail()
         }

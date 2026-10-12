@@ -4,13 +4,17 @@ import PackageDescription
 let package = Package(
     name: "MediaAnalysisExplorer",
     platforms: [.macOS(.v14)],
-    products: [.executable(name: "MediaAnalysisExplorer", targets: ["MediaAnalysisExplorer"])],
+    products: [
+        .executable(name: "MediaAnalysisExplorer", targets: ["MediaAnalysisExplorer"]),
+        .executable(name: "MediaAnalysisLauncher", targets: ["MediaAnalysisLauncher"])
+    ],
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
         .systemLibrary(name: "CBZip2"),
         .target(name: "CAtlasSupport", publicHeadersPath: "include"),
         .target(name: "ExplorerCore", dependencies: ["CSQLite", "CBZip2", "CAtlasSupport"]),
         .executableTarget(name: "MediaAnalysisExplorer", dependencies: ["ExplorerCore"], resources: [.copy("Resources/Geography")]),
+        .executableTarget(name: "MediaAnalysisLauncher", dependencies: ["ExplorerCore"]),
         .testTarget(name: "ExplorerCoreTests", dependencies: ["ExplorerCore", "CSQLite"])
     ]
 )

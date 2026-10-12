@@ -33,6 +33,10 @@ public struct ProcessingDashboard: Sendable {
 }
 
 public enum ProcessingDashboardReader {
+    public static func resampleProcesses(_ dashboard: ProcessingDashboard) -> ProcessingDashboard {
+        let sample = processSample()
+        return ProcessingDashboard(updated: Date(), sources: dashboard.sources, processes: sample.rows, processIssue: sample.issue)
+    }
     public static func read(databases: [DaemonDatabase], budget: WorkBudget) -> ProcessingDashboard {
         let sources = databases.map { database -> DashboardSource in
             var overview: StoredDataReport?
@@ -53,13 +57,15 @@ public enum ProcessingDashboardReader {
                 return DashboardSource(database: database, report: overview, progress: [], issue: error.localizedDescription)
             }
         }
-        let process: (rows: [DaemonProcess], issue: String?)
+        let process = processSample()
+        return ProcessingDashboard(updated: Date(), sources: sources, processes: process.rows, processIssue: process.issue)
+    }
+    private static func processSample() -> (rows: [DaemonProcess], issue: String?) {
         do {
             // -c reports process names rather than full command arguments. Only
             // these three exact daemon names survive the ephemeral sample.
-            process = (try parseProcesses(command("/bin/ps", ["-Aco", "pid,pcpu,rss,etime,comm"])), nil)
-        } catch { process = ([], error.localizedDescription) }
-        return ProcessingDashboard(updated: Date(), sources: sources, processes: process.rows, processIssue: process.issue)
+            return (try parseProcesses(command("/bin/ps", ["-Aco", "pid,pcpu,rss,etime,comm"])), nil)
+        } catch { return ([], error.localizedDescription) }
     }
     public static func parseProcesses(_ text: String) -> [DaemonProcess] {
         text.split(separator: "\n").compactMap { line in

@@ -12,14 +12,20 @@ private enum HistoryMetric: String, CaseIterable, Identifiable {
 
 struct ProcessingView: View {
     @ObservedObject var model: ExplorerModel
+    @ObservedObject private var launcher: AnalysisLauncher
     @State private var metric: HistoryMetric = .assets
     @State private var selectedDate: Date?
     private var history: ProcessingHistory? { model.processingHistory }
+    init(model: ExplorerModel) {
+        self.model = model
+        launcher = model.analysisLauncher
+    }
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     header
+                    AnalysisLaunchControls(launcher: model.analysisLauncher)
                     if model.processingRange == .custom {
                         HStack {
                             DatePicker("From", selection: $model.processingStart, in: ...Date(), displayedComponents: .date)
@@ -56,15 +62,25 @@ struct ProcessingView: View {
                 }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .task {
+        .task(id: launcher.isRunning) {
             if model.dashboard == nil { model.refreshDashboard() }
             if model.processingHistory == nil && !model.busy.contains("processingHistory") { model.refreshProcessingHistory() }
+            let active = launcher.isRunning
+            let monitor = ProcessingChangeMonitor(databases: model.daemonDatabases)
             var ticks = 0
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(15)) } catch { break }
+                if active {
+                    await model.pollProcessingChanges(monitor)
+                    if ticks % 4 == 0 { model.refreshProcessingProcesses() }
+                    if ticks > 0 && ticks % 60 == 0 { model.refreshDashboard() }
+                }
+                do { try await Task.sleep(for: .milliseconds(active ? 250 : 15_000)) } catch { break }
                 guard !Task.isCancelled else { break }
-                model.refreshDashboard(); ticks += 1
-                if ticks % 4 == 0 { model.refreshProcessingHistory() }
+                ticks += 1
+                if !active {
+                    model.refreshDashboard()
+                    if ticks % 4 == 0 { model.refreshProcessingHistory() }
+                }
             }
         }
     }
@@ -175,15 +191,7 @@ struct ProcessingView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(history.recentAssets) { asset in
-                            Button { model.openProcessedAsset(asset) } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: asset.name.map { ["mp4", "mov", "m4v"].contains(($0 as NSString).pathExtension.lowercased()) } == true ? "film" : "photo").foregroundStyle(.teal)
-                                    Text(asset.name ?? asset.identifier).font(.caption).lineLimit(1).truncationMode(.middle)
-                                    Spacer()
-                                    Text(asset.date.formatted(.dateTime.month(.abbreviated).day().hour().minute())).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
-                                }.padding(.vertical, 6).contentShape(Rectangle())
-                            }.buttonStyle(.plain).help(asset.identifier)
+                            RecentlyAnalyzedRow(asset: asset, arrivedAt: model.recentAnalysisArrivals[asset.identifier]) { model.openProcessedAsset(asset) }
                             Divider()
                         }
                     }
@@ -251,5 +259,42 @@ struct ProcessingView: View {
                 }
             }
         }
+    }
+}
+
+private struct RecentlyAnalyzedRow: View {
+    let asset: ProcessedAsset
+    let arrivedAt: Date?
+    let open: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var highlight = false
+    @State private var justNow = false
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                Image(systemName: asset.name.map { ["mp4", "mov", "m4v"].contains(($0 as NSString).pathExtension.lowercased()) } == true ? "film" : "photo").foregroundStyle(.teal)
+                Text(asset.name ?? asset.identifier).font(.caption).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Text(justNow ? "Just Now" : asset.date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+                    .font(.caption2.monospacedDigit()).foregroundStyle(justNow ? Color.teal : Color.secondary)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+            }.padding(.vertical, 6).padding(.horizontal, 6).contentShape(Rectangle())
+                .background(Color.teal.opacity(highlight ? 0.22 : 0), in: RoundedRectangle(cornerRadius: 5))
+        }.buttonStyle(.plain).help(asset.identifier)
+            .task(id: arrivedAt ?? asset.date) {
+                let displaySince = arrivedAt ?? asset.date
+                let age = Date().timeIntervalSince(displaySince)
+                justNow = age >= 0 && age < 30
+                highlight = arrivedAt != nil && age >= 0 && age < 1.5
+                guard justNow else { return }
+                do {
+                    if highlight {
+                        try await Task.sleep(for: .seconds(max(0, 1.5 - age)))
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 2.5)) { highlight = false }
+                    }
+                    try await Task.sleep(for: .seconds(max(0, 30 - Date().timeIntervalSince(displaySince))))
+                    justNow = false
+                } catch { /* A newer analysis or removal cancels this row's timer. */ }
+            }
     }
 }
