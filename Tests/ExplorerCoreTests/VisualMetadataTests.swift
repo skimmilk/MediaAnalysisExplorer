@@ -114,6 +114,18 @@ final class VisualMetadataTests: XCTestCase {
         XCTAssertNil(fields["ZASSET"]); XCTAssertNil(fields["ZTEXT"])
         XCTAssertEqual(VisualMetadata.label("ZCAPTION"), "Generated caption")
     }
+    func testThumbnailSubtitleUsesOneOptionalDecimalAndWholePercentWithoutChangingFields() {
+        let fields = ["ZSTARTTIMEVALUE": "1499", "ZSTARTTIMESCALE": "600", "ZQUALITY": "0.87654"]
+        let row = DBRow(id: 0, fields: fields)
+        XCTAssertEqual(VisualMetadata.thumbnailSubtitle(row), "At 2.5 s Quality 88%")
+        XCTAssertEqual(row.fields, fields)
+        XCTAssertEqual(VisualMetadata.compactSeconds(2), "2 s")
+        XCTAssertEqual(VisualMetadata.compactSeconds(1.999), "2 s")
+        XCTAssertEqual(VisualMetadata.compactSeconds(0), "0 s")
+        XCTAssertEqual(VisualMetadata.compactSeconds(0.01), "0 s")
+        XCTAssertEqual(VisualMetadata.thumbnailSubtitle(DBRow(id: 1, fields: [:])), "Time unavailable Quality unavailable")
+        XCTAssertEqual(VisualMetadata.thumbnailSubtitle(DBRow(id: 2, fields: ["ZQUALITY": "NaN"])), "Time unavailable Quality unavailable")
+    }
     func testOrientedImagePreviewAndDownsampling() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -129,6 +141,8 @@ final class VisualMetadataTests: XCTestCase {
         XCTAssertGreaterThan(preview.height, preview.width)
         let source = CGImageSourceCreateWithData(preview.data as CFData, nil)!
         XCTAssertEqual(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width, preview.width)
+        let inline = try PreviewReader.read(url, budget: WorkBudget(), maximumPixelSize: 400)
+        XCTAssertLessThanOrEqual(max(inline.width, inline.height), 400)
     }
     func testImportedVideoPreviews() throws {
         guard let directory = ProcessInfo.processInfo.environment["MAE_TEST_MEDIA_DIRECTORY"] else {

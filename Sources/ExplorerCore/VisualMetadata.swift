@@ -69,7 +69,26 @@ public enum VisualMetadata {
         return result.isFinite ? result : nil
     }
     public static func eventTime(_ row: DBRow) -> Double? {
-        seconds(row, value: "ZSTARTTIMEVALUE", scale: "ZSTARTTIMESCALE") ?? seconds(row, value: "ZTIMESTAMPVALUE", scale: "ZTIMESTAMPSCALE")
+        seconds(row, value: "ZSTARTTIMEVALUE", scale: "ZSTARTTIMESCALE") ?? seconds(row, value: "ZTIMESTAMPVALUE", scale: "ZTIMESTAMPSCALE") ?? seconds(row, value: "ZKEYFRAMETIMEVALUE", scale: "ZKEYFRAMETIMESCALE")
+    }
+    /// Missing or invalid times follow timed records; ties retain record order.
+    public static func chronologicalRows(_ rows: [DBRow]) -> [DBRow] {
+        rows.sorted {
+            let lhs = eventTime($0) ?? .infinity, rhs = eventTime($1) ?? .infinity
+            if lhs != rhs { return lhs < rhs }
+            let a = Int64($0["Z_PK"]) ?? Int64($0.id), b = Int64($1["Z_PK"]) ?? Int64($1.id)
+            return a == b ? $0.id < $1.id : a < b
+        }
+    }
+    public static func compactSeconds(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "Time unavailable" }
+        let text = String(format: "%.1f", abs(seconds) < 0.05 ? 0 : seconds)
+        return (text.hasSuffix(".0") ? String(text.dropLast(2)) : text) + " s"
+    }
+    public static func thumbnailSubtitle(_ row: DBRow) -> String {
+        let time = eventTime(row).map { "At " + compactSeconds($0) } ?? "Time unavailable"
+        guard let quality = Double(row["ZQUALITY"]), quality.isFinite, (quality * 100).isFinite else { return time + " Quality unavailable" }
+        return time + String(format: " Quality %.0f%%", quality * 100)
     }
     /// These column groups describe rectangles. Units/origin are private and remain an explicit viewing assumption.
     public static func regions(_ family: ResultFamily) -> [StoredRegion] {
@@ -262,18 +281,18 @@ public struct MediaPreview: Sendable {
 }
 
 public enum PreviewReader {
-    public static func read(_ url: URL, budget: WorkBudget) throws -> MediaPreview {
+    public static func read(_ url: URL, budget: WorkBudget, maximumPixelSize: Int = 2000) throws -> MediaPreview {
         try budget.check()
         let image: CGImage
         let video: Bool
         if let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
            let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                 kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 2000] as CFDictionary) {
+                 kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize] as CFDictionary) {
             image = thumbnail; video = false
         } else {
             guard UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true else { throw ExplorerError("No readable image preview for this original.") }
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-            generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: 2000, height: 2000)
+            generator.appliesPreferredTrackTransform = true; generator.maximumSize = CGSize(width: maximumPixelSize, height: maximumPixelSize)
             image = try generator.copyCGImage(at: .zero, actualTime: nil); video = true
         }
         try budget.check()

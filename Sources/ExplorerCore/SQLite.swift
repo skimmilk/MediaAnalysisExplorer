@@ -122,8 +122,21 @@ public final class ReadDatabase {
         let projection = projection(table)
         guard !projection.isEmpty else { return [] }
         let condition = assetKey == nil ? "" : "WHERE ZASSET = ?"
-        let order = table.has("Z_PK") ? "Z_PK" : table.columns.keys.sorted().first.map(Self.quote) ?? "1"
+        let order = assetKey == nil ? (table.has("Z_PK") ? "Z_PK" : table.columns.keys.sorted().first.map(Self.quote) ?? "1") : Self.analysisOrder(table)
         return try query("SELECT \(projection) FROM \(Self.quote(table.name)) \(condition) ORDER BY \(order) LIMIT \(min(max(limit, 1), 101)) OFFSET \(max(offset, 0))", parameters: assetKey.map { [$0] } ?? [])
+    }
+    /// Sort normalized seconds before LIMIT/OFFSET, including mixed timescales.
+    /// Invalid times sort last, matching the in-memory result presentation.
+    public static func analysisOrder(_ table: TableSchema) -> String {
+        let key = table.has("Z_PK") ? "Z_PK" : table.columns.keys.sorted().first.map(Self.quote) ?? "1"
+        let times = [("ZSTARTTIMEVALUE", "ZSTARTTIMESCALE"), ("ZTIMESTAMPVALUE", "ZTIMESTAMPSCALE"), ("ZKEYFRAMETIMEVALUE", "ZKEYFRAMETIMESCALE")].compactMap { value, scale -> String? in
+            guard table.has(value, scale) else { return nil }
+            let v = Self.quote(value), s = Self.quote(scale), seconds = "(CAST(\(v) AS REAL) / \(s))"
+            return "CASE WHEN typeof(\(v)) IN ('integer','real') AND typeof(\(s)) IN ('integer','real') AND \(s)>0 AND abs(CAST(\(v) AS REAL))<=1.7976931348623157e308 AND \(s)<=1.7976931348623157e308 AND abs(\(seconds))<=1.7976931348623157e308 THEN \(seconds) END"
+        }
+        guard !times.isEmpty else { return key }
+        let time = times.count == 1 ? times[0] : "coalesce(\(times.joined(separator: ", ")))"
+        return "(\(time)) IS NULL, (\(time)), \(key)"
     }
     /// Read only explicitly supported analysis payloads for the already selected
     /// page. Token/bookmark fields never enter this path. Each BLOB is <=64 KiB;
@@ -136,7 +149,7 @@ public final class ReadDatabase {
     public func analysisRecords(table: TableSchema, assetKey: String, field: String, value: String) throws -> [DBRow] {
         guard table.name.contains("RESULT"), table.has("ZASSET", "Z_PK"), table.columns[field] != nil,
               ["Z_PK", "ZFACEID", "ZEMBEDDINGID", "ZTHUMBNAILID"].contains(field) else { throw ExplorerError("Unsupported analysis reference") }
-        let rows = try query("SELECT \(projection(table)) FROM \(Self.quote(table.name)) WHERE ZASSET=? AND \(Self.quote(field))=? ORDER BY Z_PK LIMIT 100", parameters: [assetKey, value])
+        let rows = try query("SELECT \(projection(table)) FROM \(Self.quote(table.name)) WHERE ZASSET=? AND \(Self.quote(field))=? ORDER BY \(Self.analysisOrder(table)) LIMIT 100", parameters: [assetKey, value])
         var byteBudget = 4 * 1024 * 1024
         return try decodeAnalysis(rows, table: table, assetKey: assetKey, byteBudget: &byteBudget)
     }

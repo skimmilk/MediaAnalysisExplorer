@@ -51,7 +51,7 @@ final class PlaybackTimelineTests: XCTestCase {
         let groups = TimedResultGroup.grouped(timeline.active(at: 1.5), watching: watches)
         XCTAssertEqual(groups.map(\.table), watches)
         XCTAssertTrue(groups[0].records.isEmpty)
-        XCTAssertEqual(groups[1].records.map { $0.row["Z_PK"] }, ["2", "1", "3"])
+        XCTAssertEqual(groups[1].records.map { $0.row["Z_PK"] }, ["1", "2", "3"])
         XCTAssertEqual(groups[1].records.map(\.duration), [2, 2, 1])
         XCTAssertEqual(TimedResultGroup.grouped(timeline.active(at: 2), watching: watches)[1].records.map { $0.row["Z_PK"] }, ["2"])
         XCTAssertTrue(TimedResultGroup.grouped(timeline.active(at: 3), watching: watches).allSatisfy { $0.records.isEmpty })
@@ -90,6 +90,41 @@ final class PlaybackTimelineTests: XCTestCase {
         XCTAssertEqual(updated.families.first?.rows.count, 121)
         XCTAssertEqual(updated.playbackTimeline.revision, detail.playbackTimeline.revision)
         XCTAssertEqual(updated.playbackTimeline.active(at: 120.5).first?.caption, "Caption 121")
+    }
+    func testResultPagesUseNormalizedTimeBeforeRecordIDAndPutInvalidTimesLast() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let inserts = (1...121).map { id in
+            let scale = id.isMultiple(of: 2) ? 600 : 10
+            return "INSERT INTO ZVIDEOTHUMBNAILRESULT VALUES (\(id),1,\((121 - id) * scale),\(scale),NULL,NULL,0.876,'t0000');"
+        }.joined()
+        let sql = """
+        CREATE TABLE ZVIDEOTHUMBNAILRESULT (Z_PK INTEGER PRIMARY KEY, ZASSET INTEGER, ZSTARTTIMEVALUE INTEGER, ZSTARTTIMESCALE INTEGER, ZTIMESTAMPVALUE INTEGER, ZTIMESTAMPSCALE INTEGER, ZQUALITY REAL, ZTHUMBNAILID TEXT);
+        \(inserts)
+        INSERT INTO ZVIDEOTHUMBNAILRESULT VALUES (122,1,1,0,5,10,0.5,'t0000');
+        INSERT INTO ZVIDEOTHUMBNAILRESULT VALUES (123,1,NULL,NULL,NULL,NULL,NULL,'t0000');
+        INSERT INTO ZVIDEOTHUMBNAILRESULT VALUES (124,1,1,0,NULL,NULL,NULL,'t0000');
+        INSERT INTO ZVIDEOTHUMBNAILRESULT VALUES (125,1,'invalid',600,NULL,NULL,NULL,'t0000');
+        """
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+        let db = try ReadDatabase(path: url.path)
+        let table = try XCTUnwrap(db.schema().first)
+        let first = try db.analysisRows(table: table, assetKey: "1")
+        let second = try db.analysisRows(table: table, offset: 100, assetKey: "1")
+        let expected = ["121", "122"] + (1...120).reversed().map(String.init) + ["123", "124", "125"]
+        XCTAssertEqual((first + second).map { $0["Z_PK"] }, expected)
+        XCTAssertEqual(Set((first + second).map { $0["Z_PK"] }).count, 125)
+        let related = try db.analysisRecords(table: table, assetKey: "1", field: "ZTHUMBNAILID", value: "t0000")
+        XCTAssertEqual(related.map { $0["Z_PK"] }, Array(expected.prefix(100)))
+        let shuffled = Array((first + second).reversed())
+        let family = ResultFamily(table: table, count: 125, rows: shuffled)
+        XCTAssertEqual(family.rows.map { $0["Z_PK"] }, expected)
+        XCTAssertEqual(family.rows.first?.fields, first.first?.fields)
+        XCTAssertEqual(family.rows[1]["ZSTARTTIMESCALE"], "0")
+        XCTAssertEqual(VisualMetadata.eventTime(family.rows[1]), 0.5)
     }
     func testCapturedLandingClipIncludesAllClassificationsAndActiveCaptionApplause() throws {
         guard let path = ProcessInfo.processInfo.environment["MAE_RESEARCH_DATABASE"] else { throw XCTSkip("Set MAE_RESEARCH_DATABASE for captured interval validation.") }

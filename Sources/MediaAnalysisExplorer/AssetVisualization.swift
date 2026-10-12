@@ -18,7 +18,12 @@ struct AssetVisualization: View {
     @State private var clock = PlaybackClock()
     @State private var player: AVPlayer?
     private var timeline: RegionTimeline { referencedTimeline ?? detail.regionTimeline }
-    private var regions: [StoredRegion] { timeline.regions }
+    private var regions: [StoredRegion] {
+        timeline.regions.sorted {
+            let a = $0.start ?? .infinity, b = $1.start ?? .infinity
+            return a == b ? $0.id < $1.id : a < b
+        }
+    }
     private var captionFamilies: [ResultFamily] { detail.families.filter { $0.id.contains("CAPTION") && $0.table.has("ZCAPTION") } }
     private var otherFamilies: [ResultFamily] { detail.families.filter { !captionFamilies.map(\.id).contains($0.id) }.sorted { $0.id < $1.id } }
     private var activeRegion: String? { selected ?? hovered }
@@ -103,7 +108,7 @@ struct AssetVisualization: View {
                                     if row["ZCONFIDENCE"] != "NULL" { Text("Confidence \(row["ZCONFIDENCE"])") }
                                     if row["ZISUNSAFE"] != "NULL" { Text("Unsafe flag \(row["ZISUNSAFE"])") }
                                     if let start = VisualMetadata.seconds(row, value: "ZSTARTTIMEVALUE", scale: "ZSTARTTIMESCALE") {
-                                        Text(String(format: "At %.2f s", start))
+                                        Text("At " + VisualMetadata.compactSeconds(start))
                                         if let player { Button("Jump") { player.seek(to: CMTime(seconds: start, preferredTimescale: 600)) } }
                                     }
                                 }.font(.caption.monospacedDigit()).foregroundStyle(.secondary).controlSize(.mini)
@@ -253,16 +258,24 @@ private struct CompactResultFamily: View {
                             if family.id == "ZSAFETYRESULT" { SensitivityPercentages(row: row) }
                             if family.count > 1 { Text("Record \(row.fields["Z_PK"] ?? String(row.id))").font(.caption.weight(.medium)) }
                             if let text = row.fields["ZTEXT"], text != "NULL" { Text(text).font(.callout).textSelection(.enabled) }
-                            if let start = VisualMetadata.eventTime(row) {
+                            if family.id == "ZVIDEOTHUMBNAILRESULT" {
                                 HStack {
-                                    Text(String(format: "At %.3f s", start)).font(.caption2.monospacedDigit())
+                                    Text(VisualMetadata.thumbnailSubtitle(row)).font(.caption2.monospacedDigit())
+                                    if let start = VisualMetadata.eventTime(row), let player { Button("Jump") { player.seek(to: CMTime(seconds: start, preferredTimescale: 600)) }.controlSize(.mini) }
+                                }.foregroundStyle(.secondary)
+                                InlineThumbnailView(model: model, thumbnailID: row["ZTHUMBNAILID"])
+                            } else if let start = VisualMetadata.eventTime(row) {
+                                HStack {
+                                    Text("At " + VisualMetadata.compactSeconds(start)).font(.caption2.monospacedDigit())
                                     if let player { Button("Jump") { player.seek(to: CMTime(seconds: start, preferredTimescale: 600)); if let region = matching.first { inspect(region) } }.controlSize(.mini) }
                                     if let duration = VisualMetadata.seconds(row, value: "ZDURATIONTIMEVALUE", scale: "ZDURATIONTIMESCALE") { Text(String(format: "· %.3f s", duration)).font(.caption2.monospacedDigit()) }
                                 }.foregroundStyle(.secondary)
                             }
                             ForEach(matching) { region in Button("Inspect \(region.title.lowercased()) #\(region.record)") { inspect(region) }.controlSize(.mini).tint(regionColor(region.table)) }
-                            MetadataFields(fields: VisualMetadata.explainedFields(row, table: family.id).filter { $0.key != "ZTEXT" }, table: family.id)
-                            DecodedPayloadFields(row: row, peers: family.rows)
+                            if family.id != "ZVIDEOTHUMBNAILRESULT" {
+                                MetadataFields(fields: VisualMetadata.explainedFields(row, table: family.id).filter { $0.key != "ZTEXT" }, table: family.id)
+                                DecodedPayloadFields(row: row, peers: family.rows)
+                            }
                             RecordRelationshipsView(model: model, detail: detail, row: row, table: family.id, player: player)
                             DisclosureGroup("Raw fields · \(row.fields.values.filter { $0 == "NULL" }.count) NULL") { MetadataFields(fields: row.fields) }.font(.caption2)
                         }.padding(6).frame(maxWidth: .infinity, alignment: .leading)

@@ -49,16 +49,20 @@ struct LinkedRecordInspector: View {
                 Text("Same-asset lookup · \(records.reference.table) · \(records.reference.field)=\(records.reference.value)").font(.caption2.monospaced()).textSelection(.enabled)
                 if records.rows.isEmpty { Text("No matching stored record was found for this asset.").foregroundStyle(.secondary) }
                 if records.rows.count == 100 { Text("Showing at most 100 matches; additional matching records may exist.").font(.caption).foregroundStyle(.secondary) }
-                ForEach(records.rows) { row in
+                ForEach(VisualMetadata.chronologicalRows(records.rows)) { row in
                     GroupBox("Record " + row["Z_PK"]) {
                         VStack(alignment: .leading, spacing: 9) {
+                            if records.reference.table == "ZVIDEOTHUMBNAILRESULT" {
+                                Text(VisualMetadata.thumbnailSubtitle(row)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                InlineThumbnailView(model: model, thumbnailID: row["ZTHUMBNAILID"])
+                            }
                             if records.reference.table == "ZSAFETYRESULT" { SensitivityPercentages(row: row) }
                             if records.reference.table != "ZFEATUREVECTORRESULT", let start = VisualMetadata.eventTime(row), let player { Button(String(format: "Jump to %.3f s", start)) { player.seek(to: CMTime(seconds: max(0, start), preferredTimescale: 600)) } }
                             let family = ResultFamily(table: TableSchema(name: records.reference.table, columns: [:]), count: 1, rows: [row])
                             ForEach(VisualMetadata.regions(family)) { region in Button("Pin " + region.title) { inspect(region) } }
                             if records.reference.table == "ZFEATUREVECTORRESULT" {
                                 ImageAppearanceRecordView(row: row, player: player)
-                            } else {
+                            } else if records.reference.table != "ZVIDEOTHUMBNAILRESULT" {
                                 MetadataFields(fields: VisualMetadata.explainedFields(row, table: records.reference.table))
                                 DecodedPayloadFields(row: row, peers: records.rows)
                             }

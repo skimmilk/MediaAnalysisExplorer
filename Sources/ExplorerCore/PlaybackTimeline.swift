@@ -37,6 +37,7 @@ public struct TimedResultGroup: Identifiable, Sendable {
         }
         return tables.map { table in
             let rows = (byTable[table] ?? []).sorted { a, b in
+                if a.start != b.start { return a.start < b.start }
                 if table == "ZCLASSIFICATIONRESULT" {
                     let lhs = Double(a.row["ZCONFIDENCE"]).flatMap { $0.isFinite ? $0 : nil } ?? -.infinity
                     let rhs = Double(b.row["ZCONFIDENCE"]).flatMap { $0.isFinite ? $0 : nil } ?? -.infinity

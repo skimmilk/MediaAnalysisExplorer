@@ -52,7 +52,7 @@ public struct ResultFamily: Identifiable, Sendable {
     public let table: TableSchema
     public let count: Int
     public let rows: [DBRow]
-    public init(table: TableSchema, count: Int, rows: [DBRow]) { self.table = table; self.count = count; self.rows = rows }
+    public init(table: TableSchema, count: Int, rows: [DBRow]) { self.table = table; self.count = count; self.rows = VisualMetadata.chronologicalRows(rows) }
 }
 public struct AssetDetail: Sendable {
     public let media: ResolvedMedia?
@@ -204,7 +204,7 @@ public enum LibraryReader {
             guard remaining > 0, !budget.stopped else { timingIssues.append("Timing inventory reached its row/time budget; active results may be incomplete."); break }
             do {
                 let limit = min(remaining, 2000)
-                let order = family.table.has("Z_PK") ? "Z_PK" : "1"
+                let order = ReadDatabase.analysisOrder(family.table)
                 let rows = try db.query("SELECT \(db.projection(family.table)) FROM \(ReadDatabase.quote(family.id)) WHERE ZASSET=? ORDER BY \(order) LIMIT \(limit)", parameters: [asset.id])
                 remaining -= rows.count
                 if rows.count < family.count { timingIssues.append("\(VisualMetadata.title(family.id)): timing read covers \(rows.count) of \(family.count) records.") }

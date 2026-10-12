@@ -122,6 +122,10 @@ private struct PlaybackMomentContent: View, Equatable {
                         InfoButton(title: record.title, text: explanation)
                     }
                     if let caption = record.caption { Text(caption).textSelection(.enabled) }
+                    if record.table == "ZVIDEOTHUMBNAILRESULT" {
+                        Text(VisualMetadata.thumbnailSubtitle(record.row)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        InlineThumbnailView(model: model, thumbnailID: record.row["ZTHUMBNAILID"])
+                    }
                     if record.table == "ZFEATUREVECTORRESULT" {
                         if let row = model.detail?.families.first(where: { $0.id == record.table })?.rows.first(where: { $0["Z_PK"] == record.row["Z_PK"] }) {
                             ImageAppearanceRecordView(row: row, player: player)
@@ -131,8 +135,10 @@ private struct PlaybackMomentContent: View, Equatable {
                     } else {
                         if record.table == "ZSAFETYRESULT" { SensitivityPercentages(row: record.row) }
                         if let player { Button("Jump to start") { player.seek(to: CMTime(seconds: max(0, record.start), preferredTimescale: 600)) }.controlSize(.small) }
-                        MetadataFields(fields: record.fields)
-                        DecodedPayloadFields(row: record.row)
+                        if record.table != "ZVIDEOTHUMBNAILRESULT" {
+                            MetadataFields(fields: record.fields)
+                            DecodedPayloadFields(row: record.row)
+                        }
                     }
                     Button(record.table == "ZFEATUREVECTORRESULT" ? "Open color sample" : "Full decoded record") {
                         inspected = nil

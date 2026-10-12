@@ -374,6 +374,20 @@ enum Section: String, CaseIterable, Identifiable {
             thumbnailInspection = value
         }
     }
+    func readInlineThumbnail(_ id: String) async throws -> MediaPreview {
+        guard let asset = currentAsset else { throw ExplorerError("No selected asset") }
+        let config = source, scope = selectedDatabaseAccessURL
+        let budget = WorkBudget(seconds: 10)
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .utility) {
+                let scoped = scope?.startAccessingSecurityScopedResource() == true
+                defer { if scoped { scope?.stopAccessingSecurityScopedResource() } }
+                try budget.check()
+                let url = try LibraryReader.thumbnailURL(identifier: asset.identifier, thumbnailID: id, source: config)
+                return try PreviewReader.read(url, budget: budget, maximumPixelSize: 400)
+            }.value
+        } onCancel: { budget.cancel() }
+    }
     func inspectSourceGraph(_ path: String) {
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
         guard url.path.hasPrefix("/System/Library/"), ["net", "mil"].contains(url.pathExtension) else { errorMessage = "Unsupported declared source path"; return }
