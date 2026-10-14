@@ -65,12 +65,22 @@ enum Section: String, CaseIterable, Identifiable {
     @Published var sourceReady = false
     @Published var search = "" { didSet { if search != oldValue { scheduleMediaSearch() } } }
     @Published var mediaBrowserVisible = true
+    @Published private(set) var photoSelectionIdentifier: String?
+    @Published private(set) var photoSelectionFailure: String?
+    @Published private(set) var selectedPhotoAsset: MediaAsset?
     @Published var assets: [MediaAsset] = []
     @Published var hasNext = false
     @Published var pageCursors: [Int64] = [0]
     @Published var photosWarning: String?
     @Published var selectedAsset: String? {
-        didSet { if selectedAsset != oldValue { mediaBrowserVisible = selectedAsset == nil } }
+        didSet {
+            if selectedAsset != oldValue {
+                mediaBrowserVisible = selectedAsset == nil
+                if selectedPhotoAsset?.id != selectedAsset {
+                    selectedPhotoAsset = nil; photoSelectionIdentifier = nil; photoSelectionFailure = nil
+                }
+            }
+        }
     }
     @Published var detail: AssetDetail?
     @Published var preview: MediaPreview?
@@ -152,7 +162,11 @@ enum Section: String, CaseIterable, Identifiable {
         }
     }
 
-    var currentAsset: MediaAsset? { assets.first { $0.id == selectedAsset } }
+    var currentAsset: MediaAsset? {
+        if let selectedPhotoAsset, selectedPhotoAsset.id == selectedAsset { return selectedPhotoAsset }
+        return assets.first { $0.id == selectedAsset }
+    }
+    var canBrowsePhotos: Bool { !source.isFixture && !source.photosPath.isEmpty && !source.libraryPath.isEmpty }
     func togglePlaybackWatch(_ table: String) {
         if watchedPlaybackClasses.contains(table) { watchedPlaybackClasses.removeAll { $0 == table } }
         else { watchedPlaybackClasses = TimedResultGroup.orderedClasses(watchedPlaybackClasses + [table]) }
@@ -193,7 +207,7 @@ enum Section: String, CaseIterable, Identifiable {
         cancel(lane)
         let generation = UUID(); generations[lane] = generation
         let budget = WorkBudget(seconds: seconds); budgets[lane] = budget; busy.insert(lane)
-        let scope = ["source", "media", "detail", "resultPage", "linkedRecords", "thumbnail", "preview", "dashboard", "processingHistory"].contains(lane) ? selectedDatabaseAccessURL : nil
+        let scope = ["source", "media", "photoSelection", "detail", "resultPage", "linkedRecords", "thumbnail", "preview", "dashboard", "processingHistory"].contains(lane) ? selectedDatabaseAccessURL : nil
         tasks[lane] = Task {
             let result = await Task.detached(priority: .utility) {
                 let scoped = scope?.startAccessingSecurityScopedResource() == true
@@ -206,8 +220,9 @@ enum Section: String, CaseIterable, Identifiable {
         }
     }
     func connect(_ configuration: SourceConfiguration) {
-        for lane in ["source", "media", "mediaSearch", "detail", "resultPage", "preview"] { cancel(lane) }
+        for lane in ["source", "media", "mediaSearch", "photoSelection", "detail", "resultPage", "preview"] { cancel(lane) }
         mediaCache = []; loadedMediaKey = nil; mediaBrowserVisible = true
+        selectedPhotoAsset = nil; photoSelectionIdentifier = nil; photoSelectionFailure = nil
         mediaRefreshPending = false; mediaChangeMonitor = nil; monitoredMediaSource = nil
         source = configuration; sourceReady = false; schema = []; assets = []; detail = nil; preview = nil; previewFailure = nil; selectedAsset = nil
         search = ""; pageCursors = [0]; photosWarning = nil; notice = nil; errorMessage = nil
@@ -252,7 +267,12 @@ enum Section: String, CaseIterable, Identifiable {
     func refreshCurrentSection() {
         switch section {
         case .analyze: localAnalysis.retry()
-        case .media: if sourceReady { mediaCache = []; loadedMediaKey = nil; loadAssets(refreshDetail: true) } else { showMedia() }
+        case .media:
+            if sourceReady {
+                mediaCache = []; loadedMediaKey = nil
+                if let identifier = photoSelectionIdentifier { openPhotoAnalysis(identifier: identifier, showViewer: !mediaBrowserVisible) }
+                else { loadAssets(refreshDetail: true) }
+            } else { showMedia() }
         case .processing: refreshDashboard(); refreshProcessingHistory()
         case .caches: scan(); if cacheView == .taxonomy { loadTaxonomy() }; if cacheView == .geography { loadGeography(reload: true) }
         }
@@ -288,12 +308,13 @@ enum Section: String, CaseIterable, Identifiable {
     }
     func refreshMediaIfNeeded() {
         guard mediaRefreshPending, section == .media, sourceReady, hasMediaAssets,
-              busy.isDisjoint(with: ["source", "media", "detail", "preview", "resultPage"]) else { return }
+              busy.isDisjoint(with: ["source", "media", "photoSelection", "detail", "preview", "resultPage"]) else { return }
         mediaRefreshPending = false
         mediaCache = []; loadedMediaKey = nil
         // Reuse the current query/page. loadAssets retains the selected asset
         // when it is still present and rereads its stored analysis results.
-        loadAssets(refreshDetail: true)
+        if let identifier = photoSelectionIdentifier, !mediaBrowserVisible { openPhotoAnalysis(identifier: identifier) }
+        else { loadAssets(refreshDetail: true) }
     }
     func pollMediaChanges() async {
         guard automaticLoading, sourceReady, hasMediaAssets else { return }
@@ -344,11 +365,42 @@ enum Section: String, CaseIterable, Identifiable {
     }
     func openProcessedAsset(_ asset: ProcessedAsset) {
         showMedia()
+        cancel("photoSelection")
+        selectedPhotoAsset = nil; photoSelectionIdentifier = nil; photoSelectionFailure = nil
         if let existing = assets.first(where: { $0.identifier == asset.identifier }) {
             selectedAsset = existing.id; mediaBrowserVisible = false; loadDetail()
         } else {
+            selectedAsset = nil; loadDetail()
             search = asset.identifier
             loadAssets(reset: true)
+        }
+    }
+    func backToMediaBrowser() {
+        cancel("photoSelection")
+        mediaBrowserVisible = true
+    }
+    func openPhotoAnalysis(identifier: String?, showViewer: Bool = true) {
+        cancel("mediaSearch"); cancel("media"); cancel("photoSelection")
+        selectedPhotoAsset = nil; selectedAsset = nil; loadDetail()
+        photoSelectionIdentifier = identifier; photoSelectionFailure = nil
+        mediaBrowserVisible = !showViewer
+        guard let identifier else {
+            photoSelectionFailure = "Photos did not supply an asset identifier. Return to Photos and choose another item."
+            return
+        }
+        let config = source
+        run("photoSelection", onFailure: { [self] error in photoSelectionFailure = error.localizedDescription }, work: {
+            try LibraryReader.asset(identifier: identifier, source: config, budget: $0)
+        }) { [self] asset in
+            guard source == config, photoSelectionIdentifier == identifier else { return }
+            guard let asset else {
+                photoSelectionFailure = "No cached analysis record was found for this item in the current analysis library. It may not have been analyzed yet, or may belong to another Photos library."
+                return
+            }
+            let browserWasVisible = mediaBrowserVisible
+            selectedPhotoAsset = asset; selectedAsset = asset.id
+            mediaBrowserVisible = browserWasVisible
+            loadDetail()
         }
     }
     func ensureCacheLoaded() { if automaticLoading && !didScan { scan() } }
@@ -386,8 +438,8 @@ enum Section: String, CaseIterable, Identifiable {
             guard source == config, search == query else { return }
             let previous = selectedAsset
             assets = page.assets; hasNext = page.hasNext; photosWarning = page.photosWarning
-            if let previous, page.assets.contains(where: { $0.id == previous }) { selectedAsset = previous }
-            else { selectedAsset = page.assets.count == 1 ? page.assets.first?.id : nil }
+            if let previous, selectedPhotoAsset?.id == previous || page.assets.contains(where: { $0.id == previous }) { selectedAsset = previous }
+            else { selectedAsset = !query.isEmpty && page.assets.count == 1 ? page.assets.first?.id : nil }
             if selectedAsset != previous || refreshDetail { loadDetail() }
         }
     }

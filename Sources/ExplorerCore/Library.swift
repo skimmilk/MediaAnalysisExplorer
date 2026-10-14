@@ -78,6 +78,24 @@ public struct AssetDetail: Sendable {
 }
 
 public enum LibraryReader {
+    /// Resolves a picker selection independently of the paginated record list.
+    /// Prefer the full local identifier; UUID linkage is accepted only when unique.
+    public static func asset(identifier: String, source: SourceConfiguration, budget: WorkBudget) throws -> MediaAsset? {
+        guard let uuid = AssetIdentifier.uuid(identifier) else { throw ExplorerError("The selected photo has no valid Photos asset identifier.") }
+        let db = try ReadDatabase(path: source.analysisPath, budget: budget)
+        guard let table = try db.schema().first(where: { $0.name == "ZASSET" }), table.has("Z_PK", "ZLOCALIDENTIFIER") else {
+            throw ExplorerError("This source has no compatible analysis asset table.")
+        }
+        let projection = db.projection(table)
+        var rows = try db.query("SELECT \(projection) FROM ZASSET WHERE ZLOCALIDENTIFIER = ? COLLATE NOCASE LIMIT 2", parameters: [identifier])
+        if rows.isEmpty {
+            rows = try db.query("SELECT \(projection) FROM ZASSET WHERE ZLOCALIDENTIFIER = ? COLLATE NOCASE OR ZLOCALIDENTIFIER LIKE ? COLLATE NOCASE LIMIT 2", parameters: [uuid, uuid + "/%"])
+        }
+        guard rows.count <= 1 else { throw ExplorerError("Multiple analysis assets match this Photos identifier; no record was selected.") }
+        guard let row = rows.first else { return nil }
+        return MediaAsset(id: row["Z_PK"], identifier: row["ZLOCALIDENTIFIER"], fields: row.fields)
+    }
+
     /// Trace-observed derivative convention. Existence/readability is verified
     /// separately; a matching identifier alone does not prove image content.
     public static func thumbnailURL(identifier: String, thumbnailID: String, source: SourceConfiguration) throws -> URL {

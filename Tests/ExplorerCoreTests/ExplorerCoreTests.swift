@@ -20,6 +20,31 @@ final class ExplorerCoreTests: XCTestCase {
     }
     private let uuid = "CF0826AB-90AE-478A-8188-B01F0065BFD7"
 
+    func testPickerLookupBypassesPaginationAndPrefersFullIdentifier() throws {
+        let path = try database("picker.sqlite", """
+            CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZLOCALIDENTIFIER TEXT);
+            INSERT INTO ZASSET VALUES (1, '\(uuid)/L0/002'), (201, '\(uuid.lowercased())/L0/001');
+            """)
+        let source = SourceConfiguration(analysisPath: path, isFixture: true)
+        let asset = try XCTUnwrap(LibraryReader.asset(identifier: uuid + "/L0/001", source: source, budget: WorkBudget()))
+        XCTAssertEqual(asset.id, "201")
+        XCTAssertEqual(asset.identifier, uuid.lowercased() + "/L0/001")
+        XCTAssertThrowsError(try LibraryReader.asset(identifier: uuid, source: source, budget: WorkBudget()), "Ambiguous UUIDs must never choose an arbitrary record")
+        XCTAssertNil(try LibraryReader.asset(identifier: UUID().uuidString + "/L0/001", source: source, budget: WorkBudget()))
+        XCTAssertThrowsError(try LibraryReader.asset(identifier: "bad' OR 1=1--", source: source, budget: WorkBudget()))
+    }
+
+    func testPickerLookupSupportsUniqueUUIDLinkageAndCancellation() throws {
+        let path = try database("picker-uuid.sqlite", """
+            CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZLOCALIDENTIFIER TEXT);
+            INSERT INTO ZASSET VALUES (42, '\(uuid)');
+            """)
+        let source = SourceConfiguration(analysisPath: path, isFixture: true)
+        XCTAssertEqual(try LibraryReader.asset(identifier: uuid.lowercased() + "/L0/001", source: source, budget: WorkBudget())?.id, "42")
+        let budget = WorkBudget(); budget.cancel()
+        XCTAssertThrowsError(try LibraryReader.asset(identifier: uuid, source: source, budget: budget))
+    }
+
     func testPhotosGeographyCoordinatesAreValidatedAndOptional() throws {
         for (name, lat, lon, expected) in [("valid", "37.8199", "-122.4783", true), ("invalid", "999", "200", false), ("missing", "NULL", "NULL", false), ("sentinel", "0", "0", false)] {
             let path = try database(name + ".sqlite", "CREATE TABLE ZASSET (ZUUID TEXT,ZDIRECTORY TEXT,ZFILENAME TEXT,ZLATITUDE REAL,ZLONGITUDE REAL); INSERT INTO ZASSET VALUES ('\(uuid)','A','photo.jpg',\(lat),\(lon));")

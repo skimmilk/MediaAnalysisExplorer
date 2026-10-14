@@ -55,6 +55,7 @@ struct ExplorerView: View {
 
 struct MediaView: View {
     @ObservedObject var model: ExplorerModel
+    @StateObject private var photoBrowser = PhotoLibraryBrowser()
     private var browserVisible: Bool { model.mediaBrowserVisible }
     private var assetIndex: Int? { model.assets.firstIndex { $0.id == model.selectedAsset } }
     var body: some View {
@@ -73,31 +74,59 @@ struct MediaView: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    HStack(spacing: 10) {
-                        Button(browserVisible ? "Hide Browser" : "Browse Media", systemImage: "rectangle.leftthird.inset.filled") { model.mediaBrowserVisible.toggle() }
-                            .keyboardShortcut("b", modifiers: [.command, .shift])
-                            .disabled(model.currentAsset == nil)
-                        if let asset = model.currentAsset {
-                            Text(model.detail?.media?.originalName ?? asset.displayName ?? "Analysis asset")
-                                .font(.headline).lineLimit(1).truncationMode(.middle)
-                                .help(model.detail?.media?.originalName ?? asset.identifier).textSelection(.enabled)
-                            Spacer(minLength: 8)
-                            if let index = assetIndex {
-                                Button { stepAsset(-1) } label: { Image(systemName: "chevron.left") }
-                                    .disabled(index == 0).help("Previous asset on this page")
-                                Text("\(index + 1) / \(model.assets.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                Button { stepAsset(1) } label: { Image(systemName: "chevron.right") }
-                                    .disabled(index + 1 >= model.assets.count).help("Next asset on this page")
+                    if !browserVisible {
+                        HStack(spacing: 10) {
+                            Button("Back", systemImage: "chevron.left") { model.backToMediaBrowser() }
+                                .keyboardShortcut("[", modifiers: .command)
+                                .help("Back to media browser")
+                            if let asset = model.currentAsset {
+                                Text(model.detail?.media?.originalName ?? asset.displayName ?? "Analysis asset")
+                                    .font(.headline).lineLimit(1).truncationMode(.middle)
+                                    .help(model.detail?.media?.originalName ?? asset.identifier).textSelection(.enabled)
+                                Spacer(minLength: 8)
+                                if model.selectedPhotoAsset == nil, let index = assetIndex {
+                                    Button { stepAsset(-1) } label: { Image(systemName: "chevron.left") }
+                                        .disabled(index == 0).help("Previous asset on this page")
+                                    Text("\(index + 1) / \(model.assets.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                    Button { stepAsset(1) } label: { Image(systemName: "chevron.right") }
+                                        .disabled(index + 1 >= model.assets.count).help("Next asset on this page")
+                                }
+                            } else { Text("Media Analysis").font(.headline); Spacer() }
+                        }.controlSize(.small).padding(.horizontal, 12).padding(.vertical, 9)
+                        Divider()
+                    }
+                    Group {
+                        if browserVisible {
+                            if model.canBrowsePhotos {
+                                PhotoLibraryPicker(browser: photoBrowser) { [weak model] identifier in
+                                    model?.openPhotoAnalysis(identifier: identifier)
+                                }
+                            } else {
+                                ContentUnavailableView("Photos browser unavailable", systemImage: "photo.on.rectangle", description: Text("Open the Photos analysis library to browse photos and videos."))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
-                        } else { Text("Select media to inspect").font(.headline); Spacer() }
-                    }.controlSize(.small).padding(.horizontal, 12).padding(.vertical, 9)
-                    Divider()
-                    HSplitView {
-                        if browserVisible { mediaBrowser.frame(minWidth: 240, idealWidth: 280, maxWidth: 340) }
-                        if let asset = model.currentAsset {
+                        } else if model.busy.contains("photoSelection") {
+                            ProgressView("Finding cached analysis…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if let failure = model.photoSelectionFailure {
+                            ContentUnavailableView {
+                                Label("Cached analysis unavailable", systemImage: "photo.badge.exclamationmark")
+                            } description: {
+                                Text(failure)
+                            } actions: {
+                                if let identifier = model.photoSelectionIdentifier {
+                                    Button("Retry") { model.openPhotoAnalysis(identifier: identifier) }
+                                }
+                                Button("Back to Photos") { model.backToMediaBrowser() }
+                            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if let asset = model.currentAsset {
                             if let detail = model.detail {
                                 AssetVisualization(model: model, detail: detail, asset: asset).id(asset.id)
-                            } else { ProgressView("Reading result records…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+                            } else if model.busy.contains("detail") {
+                                ProgressView("Reading result records…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else {
+                                ContentUnavailableView("Analysis unavailable", systemImage: "exclamationmark.triangle", description: Text("The stored results could not be read."))
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
                         } else {
                             ContentUnavailableView("Select an asset", systemImage: "photo")
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -121,29 +150,6 @@ struct MediaView: View {
     private func stepAsset(_ direction: Int) {
         guard let index = assetIndex, model.assets.indices.contains(index + direction) else { return }
         model.selectedAsset = model.assets[index + direction].id
-    }
-    private var mediaBrowser: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack { Image(systemName: "magnifyingglass"); TextField("Identifier or filename", text: $model.search).textFieldStyle(.plain) }.padding(10)
-            if let warning = model.photosWarning { Text(warning).font(.caption).foregroundStyle(.orange).padding(.horizontal, 10).padding(.bottom, 6) }
-            Divider()
-            if model.assets.isEmpty && !model.busy.contains("media") { ContentUnavailableView("No matching assets", systemImage: "photo", description: Text("No compatible rows were found in this source.")) }
-            else {
-                List(model.assets, selection: $model.selectedAsset) { asset in
-                    VStack(alignment: .leading, spacing: 3) {
-                        if let name = asset.displayName { Text(name).font(.subheadline.weight(.medium)).lineLimit(2) }
-                        Text(asset.identifier).font(.system(.caption2, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-                        Text("Analysis key \(asset.id)").font(.caption2).foregroundStyle(.secondary)
-                    }.padding(.vertical, 2).tag(asset.id)
-                }.listStyle(.inset)
-            }
-            HStack {
-                Button { model.previousAssets() } label: { Image(systemName: "chevron.left") }.disabled(model.pageCursors.count <= 1 || model.busy.contains("media")).help("Previous page")
-                Spacer(); Text("Page \(model.pageCursors.count) · \(model.assets.count) assets").font(.caption2).foregroundStyle(.secondary)
-                if model.busy.contains("media") { ProgressView().controlSize(.mini) }
-                Spacer(); Button { model.nextAssets() } label: { Image(systemName: "chevron.right") }.disabled(!model.hasNext || model.busy.contains("media")).help("Next page")
-            }.controlSize(.small).padding(10)
-        }
     }
 }
 
