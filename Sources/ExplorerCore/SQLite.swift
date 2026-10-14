@@ -24,13 +24,23 @@ public final class WorkBudget: @unchecked Sendable {
     }
 }
 
-public struct DBRow: Identifiable, Sendable {
+/// A read-only display record. Database readers and local framework adapters
+/// share the same fields/decoders; fresh records carry their native evidence and
+/// never acquire a Photos persistence key.
+public struct AnalysisRecord: Identifiable, Sendable {
     public let id: Int
     public let fields: [String: String]
     public let decoded: [String: DecodedPayload]
-    public init(id: Int, fields: [String: String], decoded: [String: DecodedPayload] = [:]) { self.id = id; self.fields = fields; self.decoded = decoded }
+    public let nativeEvidence: AnalysisValue?
+    public let fieldOrigins: [String: String]
+    public let analysisSources: [String]
+    public var referenceID: String { fields["Z_PK"] ?? String(id) }
+    public init(id: Int, fields: [String: String], decoded: [String: DecodedPayload] = [:], nativeEvidence: AnalysisValue? = nil, fieldOrigins: [String: String] = [:], analysisSources: [String] = []) {
+        self.id = id; self.fields = fields; self.decoded = decoded; self.nativeEvidence = nativeEvidence; self.fieldOrigins = fieldOrigins; self.analysisSources = analysisSources
+    }
     public subscript(_ key: String) -> String { fields[key] ?? "NULL" }
 }
+public typealias DBRow = AnalysisRecord
 
 public struct TableSchema: Identifiable, Sendable {
     public var id: String { name }

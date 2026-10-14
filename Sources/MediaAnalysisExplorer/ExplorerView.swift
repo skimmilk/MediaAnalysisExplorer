@@ -14,7 +14,7 @@ struct ExplorerView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Databases read-only", systemImage: "lock.shield").foregroundStyle(.teal)
                     Text(ProcessInfo.processInfo.operatingSystemVersionString).font(.caption).foregroundStyle(.secondary)
-                    InfoButton(title: "Local read-only analysis", text: "Analysis is read locally. Source databases, cache files and originals are not modified.")
+                    InfoButton(title: "Local analysis", text: "Stored analysis is read locally. Analyze Media runs local analyses on private copies of files you choose. Source databases and originals are not modified; Apple's framework may maintain derived caches.")
                 }.padding()
             }.navigationSplitViewColumnWidth(220)
         } detail: {
@@ -25,6 +25,7 @@ struct ExplorerView: View {
                 if let notice = model.notice { message(notice, color: .teal) { model.notice = nil } }
                 switch model.section {
                 case .media: MediaView(model: model)
+                case .analyze: AnalyzeMediaView(model: model.localAnalysis, explorer: model)
                 case .processing: ProcessingView(model: model)
                 case .caches: CachesView(model: model)
                 }
@@ -32,9 +33,12 @@ struct ExplorerView: View {
         }
         .onChange(of: model.section) { _, _ in model.activateSection() }
         .toolbar {
+            ToolbarItem { LocalAnalysisStatus(model: model.localAnalysis) { model.section = .analyze } }
             ToolbarItem { if !model.busy.isEmpty { ProgressView().controlSize(.small) } }
             ToolbarItem {
-                Button("Refresh", systemImage: "arrow.clockwise") { model.refreshCurrentSection() }
+                if model.section != .analyze {
+                    Button("Refresh", systemImage: "arrow.clockwise") { model.refreshCurrentSection() }
+                }
 
             }
         }

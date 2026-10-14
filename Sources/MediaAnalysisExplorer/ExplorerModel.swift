@@ -9,10 +9,10 @@ enum CacheViewMode: String, CaseIterable, Identifiable {
 }
 
 enum Section: String, CaseIterable, Identifiable {
-    case media = "Media", processing = "Processing", caches = "Models & Caches"
+    case media = "Media", analyze = "Analyze Media", processing = "Processing", caches = "Models & Caches"
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .media: "photo.on.rectangle"; case .processing: "clock.arrow.circlepath"; case .caches: "shippingbox" }
+        switch self { case .media: "photo.on.rectangle"; case .analyze: "photo.badge.bolt"; case .processing: "clock.arrow.circlepath"; case .caches: "shippingbox" }
     }
 }
 
@@ -27,6 +27,7 @@ enum Section: String, CaseIterable, Identifiable {
     private var processingRefreshPending = false
     @Published var processingHistoryFailure: String?
     let analysisLauncher: AnalysisLauncher
+    let localAnalysis: LocalAnalysisModel
     @Published var processingRange: ProcessingRange = .week { didSet { if !settingHistoryWindow && oldValue != processingRange { refreshProcessingHistory() } } }
     @Published var processingStart = Calendar.current.date(byAdding: .day, value: -29, to: Date())! { didSet { if !settingHistoryWindow && processingRange == .custom { refreshProcessingHistory() } } }
     @Published var processingEnd = Date() { didSet { if !settingHistoryWindow && processingRange == .custom { refreshProcessingHistory() } } }
@@ -118,8 +119,9 @@ enum Section: String, CaseIterable, Identifiable {
     private var launchWasRunning = false
     private var analysisLaunchObservation: AnyCancellable?
 
-    init(automaticLoading: Bool = true, preferences: UserDefaults = .standard) {
+    init(automaticLoading: Bool = true, preferences: UserDefaults = .standard, localAnalysis: LocalAnalysisModel? = nil) {
         self.automaticLoading = automaticLoading
+        self.localAnalysis = localAnalysis ?? LocalAnalysisModel()
         analysisLauncher = AnalysisLauncher(recoverSession: automaticLoading, preferences: preferences)
         geography = GeographyModel(preferences: preferences)
         playbackPreferences = preferences
@@ -218,6 +220,7 @@ enum Section: String, CaseIterable, Identifiable {
         guard !didStart else { return }
         didStart = true
         let args = arguments ?? ProcessInfo.processInfo.arguments
+        if args.contains("--analyze") { section = .analyze; return }
         if args.contains("--geography") {
             section = .caches; cacheView = .geography
             ensureCacheLoaded(); ensureGeography()
@@ -238,6 +241,7 @@ enum Section: String, CaseIterable, Identifiable {
     }
     func activateSection() {
         switch section {
+        case .analyze: break
         case .media:
             if !sourceReady && !busy.contains("source") { showMedia() }
             else { refreshMediaIfNeeded() }
@@ -247,6 +251,7 @@ enum Section: String, CaseIterable, Identifiable {
     }
     func refreshCurrentSection() {
         switch section {
+        case .analyze: localAnalysis.retry()
         case .media: if sourceReady { mediaCache = []; loadedMediaKey = nil; loadAssets(refreshDetail: true) } else { showMedia() }
         case .processing: refreshDashboard(); refreshProcessingHistory()
         case .caches: scan(); if cacheView == .taxonomy { loadTaxonomy() }; if cacheView == .geography { loadGeography(reload: true) }

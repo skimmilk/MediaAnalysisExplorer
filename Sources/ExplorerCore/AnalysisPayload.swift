@@ -77,7 +77,7 @@ public enum AnalysisPayload {
         }
         guard let value = try? ArchiveValues.read(data) else { return nil }
         var fields: [String: String] = [:]; var rectangles: [PayloadRectangle] = []; var vector: [Double] = []; var references: [String] = []
-        var actionProbabilities: [ActionProbability] = []
+        let actionProbabilities: [ActionProbability] = []
         var summary = "Decoded property-list values · archived classes are not instantiated"
         switch column {
         case "ZKEYPOINTS":
@@ -86,22 +86,7 @@ public enum AnalysisPayload {
             summary = "Stored pose keypoint archive · layout unverified"
         case "ZACTIONSCONFIDENCE", "ZSENSITIVITYSCENERESULTS":
             guard let scores = value as? [String: Any] else { return nil }
-            for (id, score) in scores where !id.hasPrefix("$") {
-                let name = Int(id).flatMap { column == "ZACTIONSCONFIDENCE" ? taxonomy.actions[$0] : SensitivityLabels.name(for: $0) }
-                fields[name.map { "\($0.replacingOccurrences(of: "_", with: " ")) · ID \(id)" } ?? "ID \(id) (unresolved)"] = text(score)
-                if column == "ZACTIONSCONFIDENCE", let number = score as? NSNumber,
-                   number.doubleValue.isFinite, (0...1).contains(number.doubleValue) {
-                    actionProbabilities.append(ActionProbability(id: id, name: name?.replacingOccurrences(of: "_", with: " ") ?? "Action \(id)", score: number.doubleValue))
-                }
-            }
-            actionProbabilities.sort {
-                if $0.score != $1.score { return $0.score > $1.score }
-                if let a = Int($0.id), let b = Int($1.id), a != b { return a < b }
-                return $0.id < $1.id
-            }
-            fields["Label evidence"] = column == "ZACTIONSCONFIDENCE" ? "Installed action_taxonomy.plist array index; database/model revision compatibility unverified." : SensitivityLabels.evidence
-            if column == "ZSENSITIVITYSCENERESULTS" { fields["Score interpretation"] = SensitivityLabels.scoreInterpretation }
-            summary = column == "ZACTIONSCONFIDENCE" ? "Action scores · \(scores.count) archived entries" : "Sensitivity scores · \(scores.count) archived entries"
+            return scorePayload(scores, column: column, taxonomy: taxonomy)
         case "ZOBJECTBOUNDS":
             guard let bounds = value as? [String] else { return nil }
             fields["Bounds"] = text(bounds)
@@ -143,6 +128,36 @@ public enum AnalysisPayload {
             }
         }
         return DecodedPayload(summary: summary, fields: fields, rectangles: rectangles, vector: vector, referenceValues: references, actionProbabilities: actionProbabilities)
+    }
+
+    /// Native score dictionaries and archived Photos scores use the same
+    /// label mapping, formatting and interpretation; no synthetic archive needed.
+    public static func decodeScores(_ scores: [String: Double], column: String, taxonomy: AnalysisTaxonomy = .installed) -> DecodedPayload? {
+        guard ["ZACTIONSCONFIDENCE", "ZSENSITIVITYSCENERESULTS"].contains(column),
+              !scores.isEmpty, scores.count <= 1024, scores.values.allSatisfy(\.isFinite) else { return nil }
+        return scorePayload(scores.mapValues { $0 as Any }, column: column, taxonomy: taxonomy)
+    }
+    private static func scorePayload(_ scores: [String: Any], column: String, taxonomy: AnalysisTaxonomy) -> DecodedPayload {
+        var fields: [String: String] = [:]
+        var actionProbabilities: [ActionProbability] = []
+        var summary = ""
+        for (id, score) in scores where !id.hasPrefix("$") {
+            let name = Int(id).flatMap { column == "ZACTIONSCONFIDENCE" ? taxonomy.actions[$0] : SensitivityLabels.name(for: $0) }
+            fields[name.map { "\($0.replacingOccurrences(of: "_", with: " ")) · ID \(id)" } ?? "ID \(id) (unresolved)"] = text(score)
+            if column == "ZACTIONSCONFIDENCE", let number = score as? NSNumber,
+               number.doubleValue.isFinite, (0...1).contains(number.doubleValue) {
+                actionProbabilities.append(ActionProbability(id: id, name: name?.replacingOccurrences(of: "_", with: " ") ?? "Action \(id)", score: number.doubleValue))
+            }
+        }
+        actionProbabilities.sort {
+            if $0.score != $1.score { return $0.score > $1.score }
+            if let a = Int($0.id), let b = Int($1.id), a != b { return a < b }
+            return $0.id < $1.id
+        }
+        fields["Label evidence"] = column == "ZACTIONSCONFIDENCE" ? "Installed action_taxonomy.plist array index; database/model revision compatibility unverified." : SensitivityLabels.evidence
+        if column == "ZSENSITIVITYSCENERESULTS" { fields["Score interpretation"] = SensitivityLabels.scoreInterpretation }
+        summary = column == "ZACTIONSCONFIDENCE" ? "Action scores · \(scores.count) entries" : "Sensitivity scores · \(scores.count) entries"
+        return DecodedPayload(summary: summary, fields: fields, rectangles: [], actionProbabilities: actionProbabilities)
     }
 
     static func rectangle(_ string: String) -> CGRect? {

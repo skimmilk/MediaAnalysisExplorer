@@ -3,10 +3,20 @@ import Foundation
 /// Immutable interval index built on the database worker. Playback queries
 /// inspect only the current interval's candidates, including after a seek.
 public struct RegionTimeline: Sendable {
+    public let revision = UUID()
     public let regions: [StoredRegion]
+    public let orderedRegions: [StoredRegion]
+    public let regionsByID: [String: StoredRegion]
+    public let regionsByTable: [String: [StoredRegion]]
     private let lookup: IntervalLookup
     public init(regions: [StoredRegion]) {
         self.regions = regions
+        orderedRegions = regions.sorted {
+            let a = $0.start ?? .infinity, b = $1.start ?? .infinity
+            return a == b ? $0.id < $1.id : a < b
+        }
+        regionsByID = Dictionary(regions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        regionsByTable = Dictionary(grouping: orderedRegions, by: \.table)
         lookup = IntervalLookup(intervals: regions.map { ($0.start, $0.duration) })
     }
     public func visible(at seconds: Double?, hiding: Set<String> = []) -> [StoredRegion] {

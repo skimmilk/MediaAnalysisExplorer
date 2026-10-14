@@ -7,10 +7,9 @@ A native macOS app for seeing what Apple's `mediaanalysisd` knows about your pho
 ## What you can explore
 
 - **Media:** Browse your Photos library's analysis records alongside the original image or video. See captions, recognized text, scene and sensitivity scores, faces, poses, pets, and image characteristics. Detection boxes appear over the image; timed video and audio results follow playback.
+- **Analyze Media:** Drop an image or video to run local analyses immediately. Files may be up to 256 MB, images up to 40 megapixels, and videos up to two minutes. This experimental route is currently verified only on Apple silicon, macOS build 26A434; it does not cover every Photos feature.
 - **Processing:** See recent analysis activity, background sessions, result changes, and the daemon's current CPU and memory use. Change the date range or open a recently analyzed item. **Launch mediaanalysisd** requests eligible image and movie analysis across the daemon's registered Photos libraries (including System and Syndication), with launch, execution, and completion status and a Stop button.
 - **Models & Caches:** Browse model bundles and their files, see their purpose and compute stages, and inspect tensor inputs, outputs, and compiled operations. Explore the scene taxonomy and geographic scene atlas in dedicated browsers.
-
-Everything is read locally. Explorer reads Apple's databases, caches, and media without modifying them. When you choose **Launch mediaanalysisd**, Apple's daemon processes eligible media and saves its own analysis results. Explorer does not execute the cached AI programs itself. Geographic place search and the map use Apple Maps.
 
 ![Models & Caches showing a Visual Look Up program and its CPU and Neural Engine stages](docs/screenshots/models-and-caches.png)
 
@@ -76,4 +75,3 @@ Run the core tests with:
 swift test --disable-sandbox
 ```
 
-`ExplorerCore` contains the database readers, cache inventory, and bounded binary decoders. `MediaAnalysisExplorer` contains the SwiftUI app. Native interface checks live in `scripts/`, and decoder fixtures live in `Fixtures/`.

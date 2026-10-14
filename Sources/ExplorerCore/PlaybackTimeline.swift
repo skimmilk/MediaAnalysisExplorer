@@ -9,6 +9,7 @@ public struct TimedResult: Identifiable, Sendable {
     public let title: String
     public let row: DBRow
     public let fields: [String: String]
+    public let summary: String
     public let kind: TimedResultKind
     public let start: Double
     public let duration: Double?
@@ -18,6 +19,23 @@ public struct TimedResult: Identifiable, Sendable {
         guard seconds.isFinite else { return false }
         if let end { return seconds >= start && seconds < end }
         return abs(seconds - start) < 0.15
+    }
+    /// Uses actual values for every class, including native records without a
+    /// database primary key. Computed during timeline preparation, not playback.
+    static func summarize(_ row: DBRow, fields: [String: String]) -> String {
+        let preferred = ["Top stored action scores", "Scene label · installed taxonomy", "ZTEXT", "ZCONFIDENCE", "ZQUALITYSCORE", "ZQUALITY", "ZSCORE", "ZACTIVITYSCORE", "ZACTIONSCORE", "ZINTERESTINGNESSSCORE", "ZENERGYVALUES", "ZPEAKVALUES", "ZORIENTATION", "ZEMBEDDINGID", "ZEMBEDDINGDATA", "ZEMBEDDINGIDS", "ZREPRESENTATIVEMAPPING", "ZFLAGS"]
+        var keys = preferred.filter { fields[$0].map { !$0.isEmpty && $0 != "NULL" } == true }
+        if keys.isEmpty {
+            keys = VisualMetadata.meaningfulFields(row).keys.filter { key in
+                !["ZSTARTTIME", "ZDURATIONTIME", "ZTIMESTAMP", "ZKEYFRAMETIME"].contains { key.hasPrefix($0) }
+            }.sorted().filter { fields[$0].map { !$0.isEmpty && $0 != "NULL" } == true }
+        }
+        let values = keys.prefix(3).compactMap { key in
+            fields[key].map { VisualMetadata.label(key) + ": " + String($0.prefix(240)) }
+        }
+        if !values.isEmpty { return values.joined(separator: " · ") }
+        if row.nativeEvidence != nil { return "Native result #\(row.referenceID) · inspect native fields" }
+        return "Stored record \(row.referenceID) · no summary values available"
     }
 }
 
@@ -76,8 +94,9 @@ public struct PlaybackTimeline: Sendable {
                 else if family.id.contains("EMBEDDING") || family.id.contains("FEATUREVECTOR") || family.id.contains("THUMBNAIL") { kind = .representation }
                 else if family.id.contains("QUALITY") || family.id.contains("LOUDNESS") || family.id.contains("SCORE") || family.id.contains("INTERESTINGNESS") { kind = .measurement }
                 else { kind = .activity }
+                let fields = VisualMetadata.explainedFields(row, table: family.id)
                 return TimedResult(id: family.id + ":" + record, table: family.id, title: VisualMetadata.title(family.id), row: row,
-                                   fields: VisualMetadata.explainedFields(row, table: family.id), kind: kind, start: start,
+                                   fields: fields, summary: TimedResult.summarize(row, fields: fields), kind: kind, start: start,
                                    duration: VisualMetadata.seconds(row, value: "ZDURATIONTIMEVALUE", scale: "ZDURATIONTIMESCALE"))
             }
         }.sorted { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }

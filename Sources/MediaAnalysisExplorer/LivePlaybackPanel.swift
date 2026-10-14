@@ -9,6 +9,8 @@ struct LivePlaybackPanel: View {
     @ObservedObject var clock: PlaybackClock
     let timeline: PlaybackTimeline
     let player: AVPlayer?
+    var families: [ResultFamily] = []
+    var stored = true
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
@@ -26,7 +28,7 @@ struct LivePlaybackPanel: View {
                 Text(String(format: "%.2f s", clock.seconds)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 InfoButton(title: "Playback timing", text: "Analysis results follow playback. Click a timed result to jump to that point.")
             }
-            PlaybackMomentContent(model: model, revision: timeline.revision, records: timeline.active(at: clock.seconds), watching: model.watchedPlaybackClasses, available: timeline.classes, player: player).equatable()
+            PlaybackMomentContent(model: model, revision: timeline.revision, records: timeline.active(at: clock.seconds), watching: model.watchedPlaybackClasses, available: timeline.classes, player: player, families: families, stored: stored).equatable()
             if !timeline.issues.isEmpty {
                 DisclosureGroup("Timing coverage is partial") {
                     ForEach(timeline.issues, id: \.self) { Text($0).font(.caption2).foregroundStyle(.secondary) }
@@ -44,16 +46,19 @@ private struct PlaybackMomentContent: View, Equatable {
     let watching: [String]
     let available: [String]
     let player: AVPlayer?
+    let families: [ResultFamily]
+    let stored: Bool
     private let playerIdentity: ObjectIdentifier?
     private let modelIdentity: ObjectIdentifier
     @State private var inspected: TimedResult?
-    init(model: ExplorerModel, revision: UUID, records: [TimedResult], watching: [String], available: [String], player: AVPlayer?) {
+    init(model: ExplorerModel, revision: UUID, records: [TimedResult], watching: [String], available: [String], player: AVPlayer?, families: [ResultFamily], stored: Bool) {
         self.model = model; modelIdentity = ObjectIdentifier(model)
         self.revision = revision; self.records = records; self.watching = watching; self.available = available; self.player = player
         playerIdentity = player.map(ObjectIdentifier.init)
+        self.families = families; self.stored = stored
     }
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.watching == rhs.watching && lhs.available == rhs.available && lhs.revision == rhs.revision && lhs.records.map(\.id) == rhs.records.map(\.id) && lhs.playerIdentity == rhs.playerIdentity && lhs.modelIdentity == rhs.modelIdentity
+        lhs.stored == rhs.stored && lhs.watching == rhs.watching && lhs.available == rhs.available && lhs.revision == rhs.revision && lhs.records.map(\.id) == rhs.records.map(\.id) && lhs.playerIdentity == rhs.playerIdentity && lhs.modelIdentity == rhs.modelIdentity
     }
     private var captions: [TimedResult] { records.filter { $0.kind == .caption && !watching.contains($0.table) } }
     private var audio: [TimedResult] { records.filter { $0.kind == .audio && !watching.contains($0.table) } }
@@ -68,7 +73,7 @@ private struct PlaybackMomentContent: View, Equatable {
                 Divider()
             }
             if captions.isEmpty && !watching.contains(where: { $0.contains("CAPTION") }) {
-                Text("No active stored segment caption.").font(.caption).foregroundStyle(.secondary)
+                Text("No active segment caption.").font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(captions) { record in
                     VStack(alignment: .leading, spacing: 4) {
@@ -79,14 +84,14 @@ private struct PlaybackMomentContent: View, Equatable {
                             if record.row["ZCONFIDENCE"] != "NULL" { Text("Confidence \(shortNumber(record.row["ZCONFIDENCE"]))").font(.caption2).foregroundStyle(.secondary) }
                             Spacer()
                             watchButton(record.table)
-                            Button { inspected = record } label: { Image(systemName: "info.circle") }.buttonStyle(.plain).help("Inspect stored caption fields")
+                            Button { inspected = record } label: { Image(systemName: "info.circle") }.buttonStyle(.plain).help("Inspect caption fields")
                         }
                     }
                 }
             }
-            HStack { Text(watching.contains(where: { PlaybackTimeline.audioTables.contains($0) }) ? "Other audio events" : "Audio events").font(.caption.weight(.semibold)); Spacer(); Text("Stored predictions").font(.caption2).foregroundStyle(.secondary) }
+            HStack { Text(watching.contains(where: { PlaybackTimeline.audioTables.contains($0) }) ? "Other audio events" : "Audio events").font(.caption.weight(.semibold)); Spacer(); Text("Analysis predictions").font(.caption2).foregroundStyle(.secondary) }
             if audio.isEmpty {
-                Text("No other active stored audio event.").font(.caption2).foregroundStyle(.secondary)
+                Text("No other active audio event.").font(.caption2).foregroundStyle(.secondary)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 175))], alignment: .leading, spacing: 5) {
                     ForEach(audio) { record in
@@ -127,7 +132,7 @@ private struct PlaybackMomentContent: View, Equatable {
                         InlineThumbnailView(model: model, thumbnailID: record.row["ZTHUMBNAILID"])
                     }
                     if record.table == "ZFEATUREVECTORRESULT" {
-                        if let row = model.detail?.families.first(where: { $0.id == record.table })?.rows.first(where: { $0["Z_PK"] == record.row["Z_PK"] }) {
+                        if let row = (families.isEmpty ? model.detail?.families ?? [] : families).first(where: { $0.id == record.table })?.rows.first(where: { $0.referenceID == record.row.referenceID }) {
                             ImageAppearanceRecordView(row: row, player: player)
                         } else {
                             Text("Sample at " + ImageFeatureSamples.timeLabel(record.start)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -140,12 +145,12 @@ private struct PlaybackMomentContent: View, Equatable {
                             DecodedPayloadFields(row: record.row)
                         }
                     }
-                    Button(record.table == "ZFEATUREVECTORRESULT" ? "Open color sample" : "Full decoded record") {
+                    if stored { Button(record.table == "ZFEATUREVECTORRESULT" ? "Open color sample" : "Full decoded record") {
                         inspected = nil
                         model.inspectReference(ResultReference(table: record.table, field: "Z_PK", value: record.row["Z_PK"], label: record.title + " · record " + record.row["Z_PK"]))
-                    }.disabled(model.busy.contains("linkedRecords"))
+                    }.disabled(model.busy.contains("linkedRecords")) }
                     if record.table != "ZFEATUREVECTORRESULT" {
-                        DisclosureGroup("Raw stored fields") { MetadataFields(fields: record.row.fields) }.font(.caption)
+                        AnalysisRawFields(row: record.row)
                     }
                 }.padding(14)
             }.frame(width: 430, height: 420)
@@ -184,12 +189,12 @@ private struct PlaybackMomentContent: View, Equatable {
                                     Text(shortNumber(record.row["ZCONFIDENCE"])).font(.caption.monospacedDigit())
                                 }
                             } else {
-                                Text(record.caption ?? summary(record)).font(.caption2).frame(maxWidth: .infinity, alignment: .leading)
+                                Text(record.caption ?? record.summary).font(.caption2).frame(maxWidth: .infinity, alignment: .leading)
                             }
                             Text(timeRange(record)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                             Image(systemName: "info.circle").font(.caption2).foregroundStyle(.secondary)
                         }.contentShape(Rectangle())
-                    }.buttonStyle(.plain).help("Inspect stored fields and interval; scene confidence values are not normalized together")
+                    }.buttonStyle(.plain).help("Inspect fields and interval; scene confidence values are not normalized together")
                 }
             }
         }.padding(7).frame(maxWidth: .infinity, alignment: .leading)
@@ -201,12 +206,4 @@ private struct PlaybackMomentContent: View, Equatable {
         return String(format: "At %.2f s", record.start)
     }
     private func shortNumber(_ string: String) -> String { Double(string).map { String(format: "%.4f", $0) } ?? string }
-    private func summary(_ record: TimedResult) -> String {
-        let keys = ["Top stored action scores", "Scene label · installed taxonomy", "ZTEXT", "ZCONFIDENCE", "ZQUALITYSCORE", "ZQUALITY", "ZSCORE", "ZACTIVITYSCORE", "ZENERGYVALUES", "ZPEAKVALUES", "ZEMBEDDINGID", "ZFLAGS"]
-        let fields = keys.compactMap { key -> String? in
-            guard let value = record.fields[key] else { return nil }
-            return VisualMetadata.label(key) + ": " + value
-        }
-        return fields.prefix(3).joined(separator: " · ").isEmpty ? "Stored record \(record.row["Z_PK"])" : fields.prefix(3).joined(separator: " · ")
-    }
 }

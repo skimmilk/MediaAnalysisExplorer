@@ -12,10 +12,14 @@ struct RegionCanvas: View {
     let hidden: Set<String>
     let overlays: Bool
     let bottomOrigin: Bool
-    @Binding var hovered: String?
-    @Binding var selected: String?
-    @State private var pointer: CGPoint?
+    @ObservedObject var interaction: RegionInteraction
+    @State private var pointer = RegionPointer()
+    private var hovered: String? { interaction.hovered }
+    private var selected: String? { interaction.selected }
     var body: some View {
+        #if DEBUG
+        let _ = AnalysisRenderProbe.record("canvas")
+        #endif
         GeometryReader { geometry in
             let frame = VisualMetadata.imageFrame(image: CGSize(width: preview.width, height: preview.height), container: geometry.size)
             let visible = overlays ? timeline.visible(at: preview.video ? clock.seconds : nil, hiding: hidden) : []
@@ -54,23 +58,23 @@ struct RegionCanvas: View {
             }
             .onContinuousHover { phase in
                 switch phase {
-                case .active(let point): pointer = point; updateHover(point, regions: visible, frame: frame)
-                case .ended: pointer = nil; if hovered != nil { hovered = nil }
+                case .active(let point): pointer.point = point; updateHover(point, regions: visible, frame: frame)
+                case .ended: pointer.point = nil; if hovered != nil { interaction.hovered = nil }
                 }
             }
             .onChange(of: clock.seconds) { _, _ in
-                if let pointer { updateHover(pointer, regions: visible, frame: frame) }
+                if let point = pointer.point { updateHover(point, regions: visible, frame: frame) }
             }
             .onTapGesture { point in _ = pin(point, regions: visible, frame: frame) }
         }
     }
     private func updateHover(_ point: CGPoint, regions: [StoredRegion], frame: CGRect) {
         let hit = VisualMetadata.hit(point, regions: regions, frame: frame, bottomOrigin: bottomOrigin)?.id
-        if hovered != hit { hovered = hit }
+        if hovered != hit { interaction.hovered = hit }
     }
     private func pin(_ point: CGPoint, regions: [StoredRegion], frame: CGRect) -> Bool {
         guard let hit = VisualMetadata.hit(point, regions: regions, frame: frame, bottomOrigin: bottomOrigin) else { return false }
-        selected = hit.id; hovered = nil
+        interaction.selected = hit.id; interaction.hovered = nil
         return true
     }
 }
@@ -78,7 +82,7 @@ struct RegionCanvas: View {
 struct PlaybackReadout: View {
     @ObservedObject var clock: PlaybackClock
     var body: some View {
-        Text(String(format: "%.2f s · stored detections at recorded intervals", clock.seconds))
+        Text(String(format: "%.2f s · detections at analyzed intervals", clock.seconds))
             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
     }
 }

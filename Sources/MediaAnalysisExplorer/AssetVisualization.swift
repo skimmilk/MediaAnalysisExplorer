@@ -7,9 +7,44 @@ struct AssetVisualization: View {
     @ObservedObject var model: ExplorerModel
     let detail: AssetDetail
     let asset: MediaAsset
+    var body: some View {
+        AnalysisVisualization(model: model, display: AnalysisDisplay(families: detail.families,
+            regionTimeline: detail.regionTimeline, playbackTimeline: detail.playbackTimeline,
+            preview: model.preview, mediaURL: detail.media?.originalURL, previewPending: model.busy.contains("preview"),
+            previewFailure: model.previewFailure ?? detail.media?.availability, title: "Stored analysis",
+            identifier: asset.identifier, stored: detail, asset: asset))
+    }
+}
+
+/// Both sources use this presentation contract and the same inspection controls.
+/// Persistence relationships are supplied only for real stored records.
+struct AnalysisDisplay {
+    let families: [ResultFamily]
+    let regionTimeline: RegionTimeline
+    let playbackTimeline: PlaybackTimeline
+    let preview: MediaPreview?
+    let mediaURL: URL?
+    let previewPending: Bool
+    let previewFailure: String?
+    let title: String
+    let identifier: String
+    var stored: AssetDetail? = nil
+    var asset: MediaAsset? = nil
+    var captionFamilies: [ResultFamily]? = nil
+    var sourceID = "stored"
+}
+
+struct AnalysisVisualization: View {
+    @ObservedObject var model: ExplorerModel
+    let display: AnalysisDisplay
+    private var detail: AssetDetail? { display.stored }
+    private var families: [ResultFamily] { display.families }
+    @State private var localRecord: DBRow?
     @State private var previewImage: NSImage?
-    @State private var hovered: String?
-    @State private var selected: String?
+    @State private var ownedInteraction = RegionInteraction()
+    var suppliedInteraction: RegionInteraction? = nil
+    var suppliedPlayer: AVPlayer? = nil
+    private var interaction: RegionInteraction { suppliedInteraction ?? ownedInteraction }
     @State private var referencedRegion: StoredRegion?
     @State private var referencedTimeline: RegionTimeline?
     private let hidden: Set<String> = []
@@ -17,20 +52,16 @@ struct AssetVisualization: View {
     private let overlays = true
     @State private var clock = PlaybackClock()
     @State private var player: AVPlayer?
-    private var timeline: RegionTimeline { referencedTimeline ?? detail.regionTimeline }
-    private var regions: [StoredRegion] {
-        timeline.regions.sorted {
-            let a = $0.start ?? .infinity, b = $1.start ?? .infinity
-            return a == b ? $0.id < $1.id : a < b
-        }
-    }
-    private var captionFamilies: [ResultFamily] { detail.families.filter { $0.id.contains("CAPTION") && $0.table.has("ZCAPTION") } }
-    private var otherFamilies: [ResultFamily] { detail.families.filter { !captionFamilies.map(\.id).contains($0.id) }.sorted { $0.id < $1.id } }
-    private var activeRegion: String? { selected ?? hovered }
-    private var inspected: StoredRegion? { regions.first { $0.id == activeRegion } }
+    private var timeline: RegionTimeline { referencedTimeline ?? display.regionTimeline }
+    private var regions: [StoredRegion] { timeline.orderedRegions }
+    private var captionFamilies: [ResultFamily] { display.captionFamilies ?? families.filter { $0.id.contains("CAPTION") && $0.table.has("ZCAPTION") } }
+    private var otherFamilies: [ResultFamily] { families.filter { !captionFamilies.map(\.id).contains($0.id) }.sorted { $0.id < $1.id } }
     var body: some View {
+        #if DEBUG
+        let _ = AnalysisRenderProbe.record("analysis")
+        #endif
         GeometryReader { geometry in
-            let height = max(230, min(620, geometry.size.height - (model.preview?.video == true ? 310 : 180)))
+            let height = max(230, min(620, geometry.size.height - (display.preview?.video == true ? 310 : 180)))
             if geometry.size.width >= 720 {
                 HSplitView {
                     ScrollView { imageColumn(height: height).padding(12) }
@@ -53,42 +84,51 @@ struct AssetVisualization: View {
                 }
             }
         }
-        .onChange(of: model.preview?.data, initial: true) { _, data in previewImage = data.flatMap(NSImage.init(data:)) }
-        .onChange(of: model.preview?.video, initial: true) { _, video in
+        .onChange(of: display.preview?.data, initial: true) { _, data in previewImage = data.flatMap(NSImage.init(data:)) }
+        .onChange(of: display.preview?.video, initial: true) { _, video in
             stopPlayer()
-            if video == true, let url = detail.media?.originalURL {
-                let newPlayer = AVPlayer(url: url); player = newPlayer
+            if video == true, let url = display.mediaURL {
+                let newPlayer = suppliedPlayer ?? AVPlayer(url: url); player = newPlayer
                 clock.follow(newPlayer)
             }
         }
         .onDisappear { stopPlayer() }
-        .popover(item: $model.linkedRecords) { records in
+        .onChange(of: display.sourceID) { _, _ in interaction.reset(); referencedRegion = nil; referencedTimeline = nil; localRecord = nil }
+        .popover(item: $localRecord) { row in
+            ScrollView { VStack(alignment: .leading, spacing: 10) {
+                HStack { Text("Fresh result details").font(.headline); Spacer(); Button("Done") { localRecord = nil } }
+                MetadataFields(fields: row.fields)
+                DecodedPayloadFields(row: row)
+                AnalysisRawFields(row: row)
+            }.padding(14) }.frame(width: 430, height: 420)
+        }
+        .popover(item: Binding(get: { detail == nil ? nil : model.linkedRecords }, set: { model.linkedRecords = $0 })) { records in
             LinkedRecordInspector(model: model, records: records, player: player, inspect: { region in
                 referencedRegion = region
-                referencedTimeline = RegionTimeline(regions: detail.regionTimeline.regions.filter { $0.id != region.id } + [region])
-                selected = region.id; hovered = nil; model.linkedRecords = nil
+                referencedTimeline = RegionTimeline(regions: display.regionTimeline.regions.filter { $0.id != region.id } + [region])
+                interaction.selected = region.id; interaction.hovered = nil; model.linkedRecords = nil
             }, done: { model.linkedRecords = nil })
         }
-        .popover(item: $model.thumbnailInspection) { value in ThumbnailInspectionView(inspection: value) { model.thumbnailInspection = nil } }
-        .onChange(of: detail.regionTimeline.regions.count) { _, _ in
-            if let region = referencedRegion { referencedTimeline = RegionTimeline(regions: detail.regionTimeline.regions.filter { $0.id != region.id } + [region]) }
+        .popover(item: Binding(get: { detail == nil ? nil : model.thumbnailInspection }, set: { model.thumbnailInspection = $0 })) { value in ThumbnailInspectionView(inspection: value) { model.thumbnailInspection = nil } }
+        .onChange(of: display.regionTimeline.regions.count) { _, _ in
+            if let region = referencedRegion { referencedTimeline = RegionTimeline(regions: display.regionTimeline.regions.filter { $0.id != region.id } + [region]) }
         }
     }
     private func imageColumn(height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             previewCanvas(height: height)
-            if model.preview?.video == true {
-                LivePlaybackPanel(model: model, clock: clock, timeline: detail.playbackTimeline, player: player)
-                AudioTimelineView(clock: clock, timeline: detail.playbackTimeline, player: player)
+            if display.preview?.video == true {
+                LivePlaybackPanel(model: model, clock: clock, timeline: display.playbackTimeline, player: player, families: detail == nil ? families : [], stored: detail != nil)
+                AudioTimelineView(clock: clock, timeline: display.playbackTimeline, player: player)
             }
-            if model.preview?.video == true {
+            if display.preview?.video == true {
                 PlaybackReadout(clock: clock)
             }
             if captionFamilies.isEmpty {
-                Text("No caption stored for this asset.").font(.caption).foregroundStyle(.secondary)
+                Text(detail == nil ? "No caption returned yet." : "No caption stored for this asset.").font(.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(captionFamilies) { family in
-                    if family.id == "ZVIDEOSEGMENTCAPTIONRESULT", model.preview?.video == true {
+                    if family.id == "ZVIDEOSEGMENTCAPTIONRESULT", display.preview?.video == true {
                         DisclosureGroup("All stored segment captions · \(family.count)") { captionCard(family) }.font(.caption)
                     } else { captionCard(family) }
                 }
@@ -112,8 +152,8 @@ struct AssetVisualization: View {
                                         if let player { Button("Jump") { player.seek(to: CMTime(seconds: start, preferredTimescale: 600)) } }
                                     }
                                 }.font(.caption.monospacedDigit()).foregroundStyle(.secondary).controlSize(.mini)
-                                RecordRelationshipsView(model: model, detail: detail, row: row, table: family.id, player: player)
-                                DisclosureGroup("Caption fields") { MetadataFields(fields: VisualMetadata.meaningfulFields(row).filter { $0.key != "ZCAPTION" }) }.font(.caption)
+                                if let detail { RecordRelationshipsView(model: model, detail: detail, row: row, table: family.id, player: player) }
+                                DisclosureGroup("Caption fields") { MetadataFields(fields: VisualMetadata.meaningfulFields(row).filter { $0.key != "ZCAPTION" }); if row.nativeEvidence != nil { AnalysisRawFields(row: row) } }.font(.caption)
                             }
                         }
                         if family.count > family.rows.count { Text("Showing \(family.rows.count) of \(family.count) captions.").font(.caption).foregroundStyle(.secondary) }
@@ -121,14 +161,14 @@ struct AssetVisualization: View {
                         .background(.quaternary.opacity(0.35)).clipShape(RoundedRectangle(cornerRadius: 6))
     }
     @ViewBuilder private func previewCanvas(height: CGFloat) -> some View {
-        if let preview = model.preview, let image = previewImage {
+        if let preview = display.preview, let image = previewImage {
             RegionCanvas(clock: clock, timeline: timeline, preview: preview, image: image, player: player,
-                         hidden: hidden, overlays: overlays, bottomOrigin: bottomOrigin, hovered: $hovered, selected: $selected)
+                         hidden: hidden, overlays: overlays, bottomOrigin: bottomOrigin, interaction: interaction)
                 .frame(height: height).clipShape(RoundedRectangle(cornerRadius: 6))
-        } else if model.busy.contains("preview") {
+        } else if display.previewPending {
             ProgressView("Loading local preview…").frame(maxWidth: .infinity).frame(height: height)
         } else {
-            ContentUnavailableView("Preview unavailable", systemImage: "photo", description: Text(model.previewFailure ?? detail.media?.availability ?? "No linked local original.")).frame(height: height)
+            ContentUnavailableView("Preview unavailable", systemImage: "photo", description: Text(display.previewFailure ?? "No local preview available.")).frame(height: height)
         }
     }
     private var inspectorColumn: some View {
@@ -137,88 +177,62 @@ struct AssetVisualization: View {
     private var inspectorHeader: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Stored analysis").font(.headline)
+                Text(display.title).font(.headline)
                 Spacer()
-                Text("\(detail.families.count) families · \(detail.families.reduce(0) { $0 + $1.count }) results").font(.caption2).foregroundStyle(.secondary)
+                Text("\(families.count) families · \(families.reduce(0) { $0 + $1.count }) results").font(.caption2).foregroundStyle(.secondary)
             }
-            Text(asset.identifier).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).help(asset.identifier).textSelection(.enabled)
-            if detail.media?.location != nil {
+            Text(display.identifier).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).help(display.identifier).textSelection(.enabled)
+            if detail?.media?.location != nil {
                 Button("Show Geography", systemImage: "map") { model.openMediaGeography() }.controlSize(.small)
             }
             if !regions.isEmpty {
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            Label(inspected?.title ?? "Region inspector", systemImage: "viewfinder").font(.subheadline.weight(.semibold))
-                            InfoButton(title: "Region inspector", text: "Hover a box on the image, click to pin, or choose a detection above.")
-                            Spacer()
-                            if selected != nil { Text("Pinned").font(.caption2).foregroundStyle(.orange); Button("Unpin") { selected = nil; hovered = nil }.controlSize(.mini) }
-                        }
-                        Picker("Detection", selection: Binding(get: { selected ?? "" }, set: { selected = $0.isEmpty ? nil : $0; hovered = nil })) {
-                            Text("Hover to inspect…").tag("")
-                            ForEach(regions) { region in Text("\(region.title) #\(region.record)").tag(region.id) }
-                        }.labelsHidden().controlSize(.small)
-                        if let region = inspected {
-                            Text("\(region.table) · #\(region.record)").font(.caption2.monospaced()).foregroundStyle(.secondary)
-                            Button("Full record details") { model.inspectReference(ResultReference(table: region.table, field: "Z_PK", value: region.record, label: region.title + " · record " + region.record)) }.controlSize(.mini)
-                            if let start = region.start, let player {
-                                HStack {
-                                    Text(String(format: "Detection at %.3f s", start)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button("Jump to detection") { player.seek(to: CMTime(seconds: start, preferredTimescale: 600)) }.controlSize(.mini)
-                                }
-                            }
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    MetadataFields(fields: VisualMetadata.explainedFields(DBRow(id: 0, fields: region.fields), table: region.table), table: region.table)
-                                    if let row = detail.families.first(where: { $0.id == region.table })?.rows.first(where: { ($0.fields["Z_PK"] ?? String($0.id)) == region.record }) {
-                                        DecodedPayloadFields(row: row)
-                                    }
-                                }
-                            }
-                                .frame(height: 170)
-                        } else {
-                            Text("No detection selected.").font(.caption).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, minHeight: 42, alignment: .topLeading)
-                        }
-                    }.padding(4).frame(maxWidth: .infinity, alignment: .leading)
-                }
+                RegionInspector(interaction: interaction, timeline: timeline, families: families,
+                                player: player, inspectRecord: inspectRecord)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private var inspectorResults: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if detail.families.isEmpty { Text("No stored result rows yet.").font(.caption).foregroundStyle(.secondary) }
+            if families.isEmpty { Text(detail == nil ? "No result rows returned yet." : "No stored result rows yet.").font(.caption).foregroundStyle(.secondary) }
             ForEach(otherFamilies) { family in
                 if family.id == "ZFEATUREVECTORRESULT" {
-                    ImageAppearanceFamilyView(family: family, player: player, loading: model.busy.contains("resultPage"), loadMore: { model.loadMoreResults(family.id) })
+                    ImageAppearanceFamilyView(family: family, player: player, loading: model.busy.contains("resultPage"), loadMore: { if detail != nil { model.loadMoreResults(family.id) } })
                 } else {
-                    CompactResultFamily(model: model, detail: detail, family: family, regions: regions.filter { $0.table == family.id }, active: activeRegion, player: player,
-                                        loading: model.busy.contains("resultPage"), loadMore: { model.loadMoreResults(family.id) }) { region in
-                        selected = region.id
+                    CompactResultFamily(model: model, detail: detail, timedClasses: display.playbackTimeline.classes, family: family, regions: timeline.regionsByTable[family.id] ?? [], interaction: interaction, player: player,
+                                        loading: model.busy.contains("resultPage"), loadMore: { if detail != nil { model.loadMoreResults(family.id) } }) { region in
+                        interaction.selected = region.id
                     }
                 }
             }
-            DisclosureGroup("Asset fields · analysis key \(asset.id)") { MetadataFields(fields: VisualMetadata.explainedFields(DBRow(id: 0, fields: asset.fields), table: "ZASSET")) }.font(.caption)
-            if model.preview?.video != true, !detail.playbackTimeline.issues.isEmpty { ForEach(detail.playbackTimeline.issues, id: \.self) { Text($0).font(.caption2).foregroundStyle(.orange) } }
-            PersistenceHistoryView(history: detail.persistence)
-            DisclosureGroup("Photos linkage & original") {
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack {
-                        Text(detail.media == nil ? "Photos link unavailable" : "Matched Photos record").font(.caption).foregroundStyle(.secondary)
-                        InfoButton(title: "Photos linkage", text: detail.linkageNote)
-                    }
-                    if let media = detail.media {
-                        Text(media.availability).font(.caption)
-                        Text(media.originalURL?.path ?? media.filename).font(.caption2).textSelection(.enabled)
+            if display.preview?.video != true, !display.playbackTimeline.issues.isEmpty { ForEach(display.playbackTimeline.issues, id: \.self) { Text($0).font(.caption2).foregroundStyle(.orange) } }
+            if let detail, let asset = display.asset {
+                DisclosureGroup("Asset fields · analysis key \(asset.id)") { MetadataFields(fields: VisualMetadata.explainedFields(DBRow(id: 0, fields: asset.fields), table: "ZASSET")) }.font(.caption)
+                PersistenceHistoryView(history: detail.persistence)
+                DisclosureGroup("Photos linkage & original") {
+                    VStack(alignment: .leading, spacing: 7) {
                         HStack {
-                            Button("Reveal", systemImage: "folder") { if let url = media.originalURL { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
-                            Button("Open Original", systemImage: "eye") { if let url = media.originalURL { NSWorkspace.shared.open(url) } }
-                        }.disabled(media.originalURL == nil).controlSize(.small)
-                    }
-                }.padding(.top, 6)
-            }.font(.caption)
+                            Text(detail.media == nil ? "Photos link unavailable" : "Matched Photos record").font(.caption).foregroundStyle(.secondary)
+                            InfoButton(title: "Photos linkage", text: detail.linkageNote)
+                        }
+                        if let media = detail.media {
+                            Text(media.availability).font(.caption)
+                            Text(media.originalURL?.path ?? media.filename).font(.caption2).textSelection(.enabled)
+                            HStack {
+                                Button("Reveal", systemImage: "folder") { if let url = media.originalURL { NSWorkspace.shared.activateFileViewerSelecting([url]) } }
+                                Button("Open Original", systemImage: "eye") { if let url = media.originalURL { NSWorkspace.shared.open(url) } }
+                            }.disabled(media.originalURL == nil).controlSize(.small)
+                        }
+                    }.padding(.top, 6)
+                }.font(.caption)
+            }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func inspectRecord(_ region: StoredRegion) {
+        if detail != nil {
+            model.inspectReference(ResultReference(table: region.table, field: "Z_PK", value: region.record, label: region.title + " · record " + region.record))
+        } else {
+            localRecord = families.first { $0.id == region.table }?.rows.first { $0.referenceID == region.record }
+        }
     }
     private func stopPlayer() {
         clock.follow(nil)
@@ -229,28 +243,32 @@ struct AssetVisualization: View {
 
 private struct CompactResultFamily: View {
     @ObservedObject var model: ExplorerModel
-    let detail: AssetDetail
+    let detail: AssetDetail?
+    let timedClasses: [String]
     let family: ResultFamily
     let regions: [StoredRegion]
-    let active: String?
+    let interaction: RegionInteraction
     let player: AVPlayer?
     let loading: Bool
     let loadMore: () -> Void
     let inspect: (StoredRegion) -> Void
     @State private var expanded: Bool
     @State private var visibleCount = 20
-    init(model: ExplorerModel, detail: AssetDetail, family: ResultFamily, regions: [StoredRegion], active: String?, player: AVPlayer?, loading: Bool, loadMore: @escaping () -> Void, inspect: @escaping (StoredRegion) -> Void) {
-        self.model = model; self.detail = detail
-        self.family = family; self.regions = regions; self.active = active; self.player = player; self.loading = loading; self.loadMore = loadMore; self.inspect = inspect
+    init(model: ExplorerModel, detail: AssetDetail?, timedClasses: [String], family: ResultFamily, regions: [StoredRegion], interaction: RegionInteraction, player: AVPlayer?, loading: Bool, loadMore: @escaping () -> Void, inspect: @escaping (StoredRegion) -> Void) {
+        self.model = model; self.detail = detail; self.timedClasses = timedClasses
+        self.family = family; self.regions = regions; self.interaction = interaction; self.player = player; self.loading = loading; self.loadMore = loadMore; self.inspect = inspect
         _expanded = State(initialValue: family.count == 1)
     }
     var body: some View {
+        #if DEBUG
+        let _ = AnalysisRenderProbe.record("family")
+        #endif
         GroupBox {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(family.id).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                     if family.id == "ZHUMANPOSERESULT" {
-                        Text("Keypoints not stored in \(family.rows.filter { $0["ZKEYPOINTS"] == "NULL" }.count) of \(family.rows.count) loaded rows.").font(.caption2).foregroundStyle(.secondary)
+                        Text("Keypoints unavailable in \(family.rows.filter { $0["ZKEYPOINTS"] == "NULL" }.count) of \(family.rows.count) loaded records.").font(.caption2).foregroundStyle(.secondary)
                     }
                     ForEach(Array(family.rows.prefix(visibleCount))) { row in
                         let matching = regions.filter { $0.record == (row.fields["Z_PK"] ?? String(row.id)) }
@@ -276,16 +294,16 @@ private struct CompactResultFamily: View {
                                 MetadataFields(fields: VisualMetadata.explainedFields(row, table: family.id).filter { $0.key != "ZTEXT" }, table: family.id)
                                 DecodedPayloadFields(row: row, peers: family.rows)
                             }
-                            RecordRelationshipsView(model: model, detail: detail, row: row, table: family.id, player: player)
-                            DisclosureGroup("Raw fields · \(row.fields.values.filter { $0 == "NULL" }.count) NULL") { MetadataFields(fields: row.fields) }.font(.caption2)
+                            if let detail { RecordRelationshipsView(model: model, detail: detail, row: row, table: family.id, player: player) }
+                            AnalysisRawFields(row: row)
                         }.padding(6).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(matching.contains { $0.id == active } ? regionColor(family.id).opacity(0.12) : Color.clear)
+                            .background(RegionSelectionBackground(interaction: interaction, regions: matching.map(\.id), table: family.id))
                             .clipShape(RoundedRectangle(cornerRadius: 4))
                         if family.rows.count > 1 { Divider() }
                     }
                     if family.count > min(visibleCount, family.rows.count) {
                         HStack {
-                            Text("Showing \(min(visibleCount, family.rows.count)) · \(family.rows.count) loaded · \(family.count) stored").font(.caption2).foregroundStyle(.secondary)
+                            Text("Showing \(min(visibleCount, family.rows.count)) · \(family.rows.count) loaded · \(family.count) results").font(.caption2).foregroundStyle(.secondary)
                             Spacer()
                             if visibleCount < family.rows.count { Button("Show next 20") { visibleCount += 20 }.controlSize(.mini) }
                             if family.rows.count < family.count { Button(loading ? "Loading…" : "Load next 100") { loadMore() }.disabled(loading).controlSize(.mini) }
@@ -299,7 +317,7 @@ private struct CompactResultFamily: View {
                         InfoButton(title: VisualMetadata.title(family.id), text: explanation)
                     }
                     Spacer()
-                    if detail.playbackTimeline.classes.contains(family.id) {
+                    if timedClasses.contains(family.id) {
                         Button { model.togglePlaybackWatch(family.id) } label: {
                             Image(systemName: model.watchedPlaybackClasses.contains(family.id) ? "pin.fill" : "pin")
                         }.buttonStyle(.plain)

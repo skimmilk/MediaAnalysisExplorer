@@ -10,7 +10,7 @@ struct ImageAppearanceFamilyView: View {
     let loadMore: () -> Void
     @State private var selection: String?
     private var samples: [DBRow] { ImageFeatureSamples.ordered(family.rows) }
-    private var selected: DBRow? { samples.first { $0["Z_PK"] == selection } ?? samples.first }
+    private var selected: DBRow? { samples.first { $0.referenceID == selection } ?? samples.first }
 
     init(family: ResultFamily, player: AVPlayer?, loading: Bool, loadMore: @escaping () -> Void, initialSelection: String? = nil) {
         self.family = family; self.player = player; self.loading = loading; self.loadMore = loadMore
@@ -27,14 +27,14 @@ struct ImageAppearanceFamilyView: View {
                     if family.count > 1 { Text("\(family.count) samples").font(.caption2).foregroundStyle(.secondary) }
                 }
                 if samples.count > 1 {
-                    Picker("Analyzed sample", selection: Binding(get: { selected?["Z_PK"] ?? "" }, set: { selection = $0 })) {
+                    Picker("Analyzed sample", selection: Binding(get: { selected?.referenceID ?? "" }, set: { selection = $0 })) {
                         ForEach(samples) { row in
-                            Text(ImageFeatureSamples.time(row).map { "At " + ImageFeatureSamples.timeLabel($0) } ?? "Untimed sample \(row["Z_PK"])").tag(row["Z_PK"])
+                            Text(ImageFeatureSamples.time(row).map { "At " + ImageFeatureSamples.timeLabel($0) } ?? "Untimed sample \(row.referenceID)").tag(row.referenceID)
                         }
                     }.controlSize(.small).accessibilityIdentifier("appearance-sample-picker")
                 }
                 if let selected {
-                    ImageAppearanceRecordView(row: selected, player: player).id(selected["ZASSET"] + ":" + selected["Z_PK"])
+                    ImageAppearanceRecordView(row: selected, player: player).id(selected["ZASSET"] + ":" + selected.referenceID)
                 } else {
                     Text("No sample loaded.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -91,7 +91,7 @@ struct ImageAppearanceRecordView: View {
             }
             DisclosureGroup("Technical details", isExpanded: $technicalDetails) {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text("ZFEATUREVECTORRESULT · record \(row["Z_PK"])").font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    Text("ZFEATUREVECTORRESULT · record \(row.referenceID)").font(.caption2.monospaced()).foregroundStyle(.secondary)
                     MetadataFields(fields: VisualMetadata.explainedFields(row, table: "ZFEATUREVECTORRESULT"), table: "ZFEATUREVECTORRESULT")
                     if let payload {
                         Text(payload.summary).font(.caption).foregroundStyle(.secondary)
@@ -107,14 +107,14 @@ struct ImageAppearanceRecordView: View {
                             }
                         }
                     }
-                    DisclosureGroup("Raw fields") { MetadataFields(fields: row.fields, table: "ZFEATUREVECTORRESULT") }
+                    AnalysisRawFields(row: row)
                 }.padding(.top, 5)
             }.font(.caption).accessibilityIdentifier("appearance-technical-details")
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-private struct ImageColorStrip: View {
+struct ImageColorStrip: View {
     let features: ImageFeatureDescriptor
     var body: some View {
         GeometryReader { geometry in
