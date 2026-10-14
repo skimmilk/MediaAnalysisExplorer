@@ -91,7 +91,6 @@ struct ImageAppearanceRecordView: View {
             }
             DisclosureGroup("Technical details", isExpanded: $technicalDetails) {
                 VStack(alignment: .leading, spacing: 9) {
-                    Text("ZFEATUREVECTORRESULT · record \(row.referenceID)").font(.caption2.monospaced()).foregroundStyle(.secondary)
                     MetadataFields(fields: VisualMetadata.explainedFields(row, table: "ZFEATUREVECTORRESULT"), table: "ZFEATUREVECTORRESULT")
                     if let payload {
                         Text(payload.summary).font(.caption).foregroundStyle(.secondary)

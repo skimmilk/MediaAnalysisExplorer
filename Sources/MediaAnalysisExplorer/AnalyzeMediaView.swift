@@ -66,7 +66,7 @@ struct AnalyzeMediaView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 if let run = model.current {
-                    LocalMediaInspector(explorer: explorer, run: run, cancel: model.cancel, retry: model.retry).id(run.id)
+                    LocalMediaInspector(explorer: explorer, run: run).id(run.id)
                 }
             }
         }
@@ -81,8 +81,6 @@ struct AnalyzeMediaView: View {
 struct LocalMediaInspector: View {
     @ObservedObject var explorer: ExplorerModel
     let run: LocalMediaRun
-    let cancel: () -> Void
-    let retry: () -> Void
     var display: AnalysisDisplay {
         AnalysisDisplay(families: run.presentation.families,
             regionTimeline: run.presentation.regionTimeline, playbackTimeline: run.presentation.playbackTimeline,
@@ -92,18 +90,11 @@ struct LocalMediaInspector: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text(run.state.rawValue).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if run.active { Button("Stop", action: cancel) }
-                else { Button("Analyze Again", action: retry) }
-                InfoButton(title: "Fresh media analysis", text: "Local MediaAnalysis.framework calls analyze a private copy. These results use the same inspection controls as Photos results. All supported analyses run automatically and appear together. Identical repeated results are combined; different results retain their source information in the native fields. Currently verified on Apple silicon, macOS build 26A434; not every Photos feature is available. Apple's framework may maintain derived caches.")
-            }.controlSize(.small).padding(.horizontal, 12).padding(.vertical, 8)
             if let error = run.error ?? run.reports.compactMap(\.failure).first {
                 Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                Divider()
             }
-            Divider()
             AnalysisVisualization(model: explorer, display: display)
             if !run.reports.isEmpty {
                 DisclosureGroup("Analysis details & native evidence") {

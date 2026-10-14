@@ -266,7 +266,6 @@ private struct CompactResultFamily: View {
         GroupBox {
             DisclosureGroup(isExpanded: $expanded) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(family.id).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                     if family.id == "ZHUMANPOSERESULT" {
                         Text("Keypoints unavailable in \(family.rows.filter { $0["ZKEYPOINTS"] == "NULL" }.count) of \(family.rows.count) loaded records.").font(.caption2).foregroundStyle(.secondary)
                     }
